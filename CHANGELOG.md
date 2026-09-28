@@ -4,6 +4,18 @@ All notable changes to RiskSentinel (by Beyond Cyber) are documented here.
 
 ---
 
+## [4.17.2] - 2026-09-28
+### Fixed
+- **The inventory asset fingerprint table was unbounded.** Every asset in the scan was rendered into one table, with the OS, application and search filters applied in the browser over the full row set. 310 assets already produced 422 KB of HTML and it grew linearly with the estate.
+- The table is now paged at 100 and the filters moved to the server, because filtering in the browser would otherwise only ever see the rows on the current page and would report a count for the page rather than the estate. Filter state now lives in the URL, so a filtered view can be linked and survives a reload.
+- Clicking an OS row, an application row, an application pill, a KPI card or either chart still filters as before; the counts, the active-filter bar and the row highlighting are rendered from the request. Quick search debounces rather than navigating on every keystroke. Pager links carry the active filters, and a page past the end clamps to the last page.
+- Inventory HTML for a 310-asset customer drops from 422 KB to 146 KB.
+
+### Known gap
+- Cortex populates `cpe` with purl strings (`pkg:rpm/redhat/kernel@...`) rather than CPE, which the CPE parser rejects, so the software and OS inventory is empty for Cortex-backed customers and the page still parses ~192,000 unusable rows on every load. Not addressed here.
+
+---
+
 ## [4.17.1] - 2026-09-28
 ### Fixed
 - **The suppression review table was unbounded.** It loaded and rendered every suppressed finding for the customer in one table, the same failure already fixed on the vulnerabilities, plugins and remediation pages. It is now paged at 100 with a pager, and a page number past the end clamps to the last page rather than showing an empty table.

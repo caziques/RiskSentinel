@@ -17,7 +17,7 @@ from werkzeug.utils import secure_filename
 
 from models import db, User, Customer, UserCustomer, ScanImport, Vulnerability, NewsFeed, RiskAcceptance, AssetGroup, AssetGroupMember, RemediationProject, RemediationItem, RemediationSnapshot, SuppressionRule
 
-__version__ = '4.17.1'
+__version__ = '4.17.2'
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'change-me-in-production-8f3k2j')
@@ -2364,6 +2364,17 @@ def _humanise(vendor, product):
     return f'{v} {p}'.strip() if p else v
 
 
+def _inv_qs(import_id, search, os_filter, app_filter, has_filter):
+    """Current inventory filters as a query-string prefix for the pager links."""
+    from urllib.parse import urlencode
+    parts = {'import_id': import_id}
+    for k, v in (('search', search), ('os', os_filter),
+                 ('app', app_filter), ('has', has_filter)):
+        if v:
+            parts[k] = v
+    return urlencode(parts) + '&'
+
+
 @app.route('/inventory')
 @login_required
 @customer_required
@@ -2371,6 +2382,14 @@ def inventory():
     import_id  = request.args.get('import_id', type=int)
     cpe_filter = request.args.get('cpe_type', '')   # 'a' / 'o' / 'h' / ''
     search     = request.args.get('search', '').strip()
+    # The fingerprint table used to render every asset and filter them in the
+    # browser. That does not scale, so the filters are now server-side and the
+    # table is paged; the counts stay truthful across the whole estate rather
+    # than describing only the page on screen.
+    os_filter  = request.args.get('os', '').strip()
+    app_filter = request.args.get('app', '').strip()
+    has_filter = request.args.get('has', '').strip()     # 'os' | 'apps' | ''
+    page       = request.args.get('page', 1, type=int)
 
     latest = _latest_import()
     if not latest:
@@ -2490,7 +2509,8 @@ def inventory():
             'medium': a.medium or 0,
         })
 
-    # Apply search filter
+    # Apply filters. OS and application both come from parsed CPE and plugin
+    # output rather than from a column, so they cannot be pushed into SQL.
     if search:
         sl = search.lower()
         asset_rows = [r for r in asset_rows
@@ -2498,6 +2518,23 @@ def inventory():
                       or sl in r['ip'].lower()
                       or sl in r['os'].lower()
                       or any(sl in a.lower() for a in r['apps'])]
+    if os_filter:
+        ol = os_filter.lower()
+        asset_rows = [r for r in asset_rows if ol in r['os'].lower()]
+    if app_filter:
+        al = app_filter.lower()
+        asset_rows = [r for r in asset_rows
+                      if any(al in a.lower() for a in r['apps'])]
+    if has_filter == 'os':
+        asset_rows = [r for r in asset_rows if r['os']]
+    elif has_filter == 'apps':
+        asset_rows = [r for r in asset_rows if r['apps']]
+
+    asset_total = len(asset_rows)
+    per_page    = 100
+    asset_pages = max(1, -(-asset_total // per_page))
+    page        = max(1, min(page, asset_pages))
+    asset_rows  = asset_rows[(page - 1) * per_page:page * per_page]
 
     # ── Changes vs previous import ────────────────────────────────────────────
     prev = (_cust_scan_q()
@@ -2564,6 +2601,9 @@ def inventory():
         top_os=top_os[:15],
         top_hw=top_hw[:10],
         asset_rows=asset_rows,
+        asset_total=asset_total, asset_page=page, asset_pages=asset_pages,
+        os_filter=os_filter, app_filter=app_filter, has_filter=has_filter,
+        inv_qs=_inv_qs(current_import.id, search, os_filter, app_filter, has_filter),
         new_software=new_software[:30],
         removed_software=removed_software[:30],
         os_changes=os_changes,
