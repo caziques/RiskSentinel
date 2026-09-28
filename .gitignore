@@ -40,7 +40,5 @@ __pycache__/
 *.swp
 
 # ── Not part of this project ─────────────────────────────────────────────────
-# Vendored third-party tool, 57 MB
-spiderfoot/
 # Stray scp artefact: the filename is the destination host
 beyondcyber@*
