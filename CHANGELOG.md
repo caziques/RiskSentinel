@@ -4,6 +4,14 @@ All notable changes to RiskSentinel (by Beyond Cyber) are documented here.
 
 ---
 
+## [4.16.2] - 2026-09-28
+### Fixed
+- **git added to the Docker image.** Mounting a git checkout at `/app` was not enough for Admin > Software Update to work in a container: the image had no `git` binary, so the page failed for a second reason after the first was solved.
+- Also sets `safe.directory /app`. git refuses to operate on a repository owned by another user, which is exactly how a bind-mounted host checkout appears from inside the container.
+- With the checkout mounted, a containerised install can now check for and apply updates from the page. Without the mount, it still correctly reports that an image-baked deployment must be rebuilt on the host.
+
+---
+
 ## [4.16.1] - 2026-09-28
 ### Fixed
 - **The update page gave a dead end on containerised installs.** It reported only "This installation is not a git repository, so it cannot self-update", which is true but unhelpful: a container runs code baked into its image, so the remedy is rebuilding the image on the host, not adopting git inside the container.

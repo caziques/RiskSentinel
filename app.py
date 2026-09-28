@@ -15,7 +15,7 @@ from werkzeug.utils import secure_filename
 
 from models import db, User, Customer, UserCustomer, ScanImport, Vulnerability, NewsFeed, RiskAcceptance, AssetGroup, AssetGroupMember, RemediationProject, RemediationItem, RemediationSnapshot, SuppressionRule
 
-__version__ = '4.16.1'
+__version__ = '4.16.2'
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'change-me-in-production-8f3k2j')
