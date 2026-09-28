@@ -4,6 +4,20 @@ All notable changes to RiskSentinel (by Beyond Cyber) are documented here.
 
 ---
 
+## [4.17.3] - 2026-09-28
+### Fixed
+- **The software inventory was empty for Cortex-backed customers.** Cortex does not emit CPE. It writes package URLs (`pkg:rpm/redhat/kernel@5.14.0`) and a shorter `app:sshd@8.7p1` form, both of which the CPE parser rejected outright, so the application inventory, the "Applications Detected" column, the applications chart and the `has=apps` filter were all blank for MCR while the page still parsed ~192,000 unusable rows on every load.
+- Identifiers are now parsed into one common vendor/product shape whichever scanner produced them. purl namespaces map to the vendor: distro namespaces read as the vendor they are (`redhat` as Red Hat, `rocky` as Rocky Linux), maven groups reduce to their recognisable segment (`io.netty` as Netty), and golang host prefixes are skipped so `github.com/gorilla` reads as Gorilla. An identifier with no namespace gets no vendor rather than being labelled with its package type.
+- Where an ecosystem repeats the vendor inside the product, the repeat is dropped: `Netty Netty-Handler` becomes `Netty-Handler`. Vendors shorter than four characters are left alone, since a short match is coincidence rather than repetition. CPE labels are unchanged.
+- MCR now shows applications on all 97 assets and a populated application inventory, where it previously showed none.
+
+### Performance
+- `_parse_cpe` is cached, and the per-asset loop parses each identifier once rather than four times.
+- The inventory's identifier query is now `DISTINCT`. Reading it per finding returned the same asset/identifier pair once per CVE: 191,725 rows to express 2,386 distinct values.
+- MCR's inventory page goes from 410ms to roughly 150ms.
+
+---
+
 ## [4.17.2] - 2026-09-28
 ### Fixed
 - **The inventory asset fingerprint table was unbounded.** Every asset in the scan was rendered into one table, with the OS, application and search filters applied in the browser over the full row set. 310 assets already produced 422 KB of HTML and it grew linearly with the estate.

@@ -4,7 +4,7 @@ import json
 import re
 import threading
 from datetime import datetime, date, timedelta
-from functools import wraps
+from functools import wraps, lru_cache
 
 import time
 import feedparser
@@ -17,7 +17,7 @@ from werkzeug.utils import secure_filename
 
 from models import db, User, Customer, UserCustomer, ScanImport, Vulnerability, NewsFeed, RiskAcceptance, AssetGroup, AssetGroupMember, RemediationProject, RemediationItem, RemediationSnapshot, SuppressionRule
 
-__version__ = '4.17.2'
+__version__ = '4.17.3'
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'change-me-in-production-8f3k2j')
@@ -2339,14 +2339,91 @@ CPE_RE = re.compile(r'(?:x-)?cpe:/([aoehf]):([^:\n\r]+?)(?::([^:\n\r]+?))?(?::([
 OS_ID_RE = re.compile(r'Remote operating system\s*:\s*(.+)', re.IGNORECASE)
 
 
+# Scanners do not agree on how to name software. Tenable emits CPE, while Cortex
+# emits package URLs (pkg:rpm/redhat/kernel@5.14.0) and a shorter app:name@version
+# form. All three have to land in the same inventory, so each is parsed into the
+# same vendor/product shape rather than the inventory understanding only CPE.
+PURL_RE = re.compile(r'^pkg:([a-z0-9.+-]+)/(.+?)(?:@([^?#]*))?(?:[?#].*)?$', re.I)
+APP_RE  = re.compile(r'^app:([^@\s]+)(?:@(.*))?$', re.I)
+
+# Distro namespaces read as the vendor of the package, which is what they are.
+_PURL_VENDOR_SEGMENT = {
+    'golang': -1,   # github.com/foo/bar -> foo is the meaningful owner
+    'npm':     0,
+    'maven':   0,   # io.netty -> the group is the vendor
+}
+
+
+def _parse_purl(purl):
+    """pkg:type/namespace/name@version, namespace optional and possibly nested."""
+    m = PURL_RE.match(purl.strip())
+    if not m:
+        return None
+    ptype = m.group(1).lower()
+    path  = [seg for seg in m.group(2).split('/') if seg]
+    if not path:
+        return None
+
+    product = path[-1]
+    ns      = path[:-1]
+    if ns:
+        # golang namespaces are host-prefixed (github.com/foo), so the host is
+        # not the vendor; for the rest the first segment is.
+        idx    = _PURL_VENDOR_SEGMENT.get(ptype, 0)
+        vendor = ns[idx] if -len(ns) <= idx < len(ns) else ns[0]
+        if ptype == 'golang' and len(ns) > 1 and '.' in ns[0]:
+            vendor = ns[1]
+        # Maven groups are reverse-DNS; the last segment is the recognisable
+        # name, so io.netty reads as Netty rather than Io.Netty.
+        if ptype == 'maven' and '.' in vendor:
+            vendor = vendor.rsplit('.', 1)[-1]
+    else:
+        # No namespace, so there is no vendor. Using the package type would
+        # label lodash as "Npm Lodash", which reads as a vendor it does not have.
+        vendor = ''
+
+    # Everything a purl describes is software installed on the host. The
+    # operating system itself is identified separately, from plugin output.
+    return {'type': 'a',
+            'vendor': vendor.replace('_', ' ').strip(),
+            'product': product.replace('_', ' ').strip(),
+            'raw': purl.strip()}
+
+
+def _parse_app(s):
+    """Cortex's short form: app:sshd@8.7p1-48.el9_7, with no vendor."""
+    m = APP_RE.match(s.strip())
+    if not m:
+        return None
+    return {'type': 'a', 'vendor': '',
+            'product': m.group(1).replace('_', ' ').strip(),
+            'raw': s.strip()}
+
+
+@lru_cache(maxsize=100_000)
 def _parse_cpe(cpe_str):
-    m = CPE_RE.match(cpe_str.strip())
+    """
+    Parse a software identifier into {type, vendor, product, raw}, or None.
+
+    Cached because the inventory parses the same handful of thousands of
+    distinct strings across hundreds of thousands of findings, several times
+    per asset row.
+    """
+    cpe_str = (cpe_str or '').strip()
+    if not cpe_str:
+        return None
+    if cpe_str.lower().startswith('pkg:'):
+        return _parse_purl(cpe_str)
+    if cpe_str.lower().startswith('app:'):
+        return _parse_app(cpe_str)
+
+    m = CPE_RE.match(cpe_str)
     if not m:
         return None
     vendor  = m.group(2).replace('_', ' ').strip()
     product = (m.group(3) or '').replace('_', ' ').replace('+', '+').strip()
     return {'type': m.group(1), 'vendor': vendor, 'product': product,
-            'raw': cpe_str.strip()}
+            'raw': cpe_str}
 
 
 def _humanise(vendor, product):
@@ -2358,10 +2435,21 @@ def _humanise(vendor, product):
         'openssl': 'OpenSSL', '7-zip': '7-Zip', 'zohocorp': 'Zoho',
         'manageengine': 'ManageEngine', 'notepad-plus-plus': 'Notepad++',
         'azul': 'Azul', 'python': 'Python', 'wireshark': 'Wireshark',
+        # Distro namespaces, which purl package identifiers carry as the vendor.
+        'redhat': 'Red Hat', 'rocky': 'Rocky Linux', 'amzn': 'Amazon Linux',
+        'ubuntu': 'Ubuntu', 'debian': 'Debian', 'alpine': 'Alpine',
+        'centos': 'CentOS', 'suse': 'SUSE', 'opensuse': 'openSUSE',
     }
     v = VENDOR_MAP.get(vendor.lower(), vendor.title())
     p = product.title() if product else ''
-    return f'{v} {p}'.strip() if p else v
+    if not p:
+        return v
+    # Package ecosystems often repeat the vendor inside the product, giving
+    # "Netty Netty-Handler" or "Core Jackson-Core". Short vendors are left
+    # alone, since a two-letter match is a coincidence rather than a repeat.
+    if len(vendor) >= 4 and vendor.lower() in product.lower():
+        return p
+    return f'{v} {p}'.strip()
 
 
 def _inv_qs(import_id, search, os_filter, app_filter, has_filter):
@@ -2419,7 +2507,11 @@ def inventory():
                                Vulnerability.cpe)
              .filter(Vulnerability.scan_import_id == current_import.id,
                      Vulnerability.cpe.isnot(None),
-                     Vulnerability.cpe != '').all())
+                     Vulnerability.cpe != '')
+             # One row per asset/identifier pair. A finding-level read returns
+             # the same pair once per CVE, which for a Cortex tenant is a couple
+             # of hundred thousand rows to say the same few thousand things.
+             .distinct().all())
 
     # asset -> set of unique CPE raw strings
     asset_cpes     = {}   # asset -> set of raw CPE strings
@@ -2490,19 +2582,19 @@ def inventory():
     asset_rows = []
     for a in all_assets_q:
         cpes = asset_cpes.get(a.asset, set())
-        apps = sorted({
-                   _humanise(_parse_cpe(c)['vendor'], _parse_cpe(c)['product'])
-                   for c in cpes
-                   if _parse_cpe(c) and _parse_cpe(c)['type'] == 'a'
-                   and _parse_cpe(c)['product']
-               })[:8]
+        # Parse each identifier once per asset rather than four times.
+        parsed_cpes = [p for p in (_parse_cpe(c) for c in cpes) if p]
+        app_labels  = {_humanise(p['vendor'], p['product'])
+                       for p in parsed_cpes
+                       if p['type'] == 'a' and p['product']}
+        apps        = sorted(app_labels)[:8]
         os_info = os_map.get(a.asset, {})
         asset_rows.append({
             'asset': a.asset,
             'ip': a.ip_address or '',
             'os': os_info.get('os', ''),
             'apps': apps,
-            'app_count': len({c for c in cpes if _parse_cpe(c) and _parse_cpe(c)['type'] == 'a'}),
+            'app_count': sum(1 for p in parsed_cpes if p['type'] == 'a'),
             'vuln_count': a.vuln_count,
             'critical': a.critical or 0,
             'high': a.high or 0,
