@@ -4,6 +4,21 @@ All notable changes to RiskSentinel (by Beyond Cyber) are documented here.
 
 ---
 
+## [4.16.0] - 2026-09-28
+### Added
+- **Software Update from git**, at Admin > Software Update. Shows the installed version, branch, commit and remote; checks the repository for waiting changes; lists them with author and message; and applies them on one click.
+- The repository is configurable, defaulting to `https://github.com/caziques/RiskSentinel.git`. Changing it repoints the installation, and the current remote is shown so it is never ambiguous which repository an instance follows.
+- **Refuses to update over uncommitted local edits.** A dirty working tree blocks the apply button and the route rejects the request, listing the offending files, because a pull would discard that work silently.
+- Updates are fast-forward only, so an update can never rewrite local history. If it cannot fast-forward it fails and changes nothing.
+- Admin only, enforced on all three routes rather than by hiding the menu entry.
+- The page states plainly what an update touches (code, templates, importers, schema via automatic migration) and what it cannot (database, uploads, credentials), since those are excluded from version control.
+
+### Changed
+- **Project is now under version control.** `.gitignore` written first and verified before the initial commit: no `.env` file, no database, no uploads, no backups, no scan exports. 59 files committed.
+- Excluded two items that were sitting in the project directory but are not part of it: a vendored 57 MB copy of SpiderFoot (2,613 files), and a stray gzip archive named `beyondcyber@10.0.169.10`, evidently a botched `scp` where the filename is the destination host. Both left on disk, simply not tracked.
+
+---
+
 ## [4.15.1] - 2026-09-27
 ### Fixed
 - **Severity KPI cards on the Executive Summary did not filter.** Clicking Critical, High, Medium or Low opened the Vulnerabilities page showing every severity. The links passed `risk_factor=` while the route reads `severity=`, so the filter was silently dropped rather than erroring. Five links corrected, including the per-severity links in the SLA breakdown.
