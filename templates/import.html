@@ -1,16 +1,70 @@
 {% extends "base.html" %}
-{% block title %}Import CSV{% endblock %}
+{% block title %}Update{% endblock %}
 
 {% block content %}
 <div class="mb-4">
-  <h4 class="fw-bold mb-0">Import Weekly Scan</h4>
-  <small class="text-secondary">Upload a Tenable vulnerability export CSV</small>
+  <h4 class="fw-bold mb-0">Update Vulnerability Data</h4>
+  <small class="text-secondary">
+    Pull straight from the scanner API, or upload an export
+  </small>
 </div>
 
 <div class="row g-4">
   <div class="col-lg-5">
+
+    <!-- ── API update ─────────────────────────────────────────────────── -->
+    <div class="card p-4 mb-3"
+         style="{% if cust and cust.can_api_update %}border-color:#1f6feb;{% endif %}">
+      <h6 class="text-secondary mb-3">
+        <i class="bi bi-arrow-repeat me-1"></i>Update from scanner API
+      </h6>
+
+      {% if not cust %}
+        <p class="text-secondary small mb-0">Select a customer first.</p>
+
+      {% elif not cust.can_api_update %}
+        <p class="text-secondary small mb-2">
+          No scanner API is configured for {{ cust.name }}, so this customer is
+          updated by uploading an export.
+        </p>
+        {% if current_user.role == 'admin' %}
+        <a href="{{ url_for('admin_customers') }}" class="btn btn-sm btn-outline-secondary">
+          <i class="bi bi-gear me-1"></i>Configure scanner
+        </a>
+        {% endif %}
+
+      {% else %}
+        <div class="row g-2 small mb-3">
+          <div class="col-4 text-secondary">Scanner</div>
+          <div class="col-8 text-white">{{ cust.scanner_label }}</div>
+          <div class="col-4 text-secondary">Options</div>
+          <div class="col-8"><code class="text-info">{{ cust.scanner_args or 'defaults' }}</code></div>
+        </div>
+        <form method="post" action="{{ url_for('import_api') }}" id="apiForm">
+          <button class="btn btn-primary w-100" id="apiBtn">
+            <i class="bi bi-arrow-repeat me-1"></i> Update-API
+          </button>
+        </form>
+        <div class="form-text text-secondary">
+          Runs in the background. A Cortex pull can take several minutes; you can
+          navigate away and come back.
+        </div>
+
+        <div id="apiProgress" class="mt-3 d-none">
+          <div class="d-flex align-items-center gap-2 mb-2">
+            <span id="apiIcon"></span>
+            <strong id="apiState" class="small text-white"></strong>
+            <span id="apiClock" class="small text-secondary ms-auto"></span>
+          </div>
+          <pre id="apiLog" class="small text-secondary mb-0 p-2"
+               style="background:#0d1117;border:1px solid #30363d;max-height:220px;overflow:auto;"></pre>
+        </div>
+      {% endif %}
+    </div>
+
+    <!-- ── CSV upload ─────────────────────────────────────────────────── -->
     <div class="card p-4">
-      <h6 class="text-secondary mb-3"><i class="bi bi-cloud-upload me-1"></i>Upload CSV File</h6>
+      <h6 class="text-secondary mb-3"><i class="bi bi-cloud-upload me-1"></i>Upload an export</h6>
       <form method="post" enctype="multipart/form-data">
         <div class="mb-3">
           <label class="form-label small text-secondary">CSV File</label>
@@ -45,11 +99,11 @@
   <div class="col-lg-7">
     <div class="card">
       <div class="p-3 border-bottom border-secondary">
-        <h6 class="mb-0 text-secondary">Import History</h6>
+        <h6 class="mb-0 text-secondary">Update History</h6>
       </div>
       <div class="table-responsive">
         <table class="table table-sm table-hover mb-0">
-          <thead><tr><th>Date</th><th>File</th><th>Records</th><th>By</th><th>Notes</th>
+          <thead><tr><th>Date</th><th>Source</th><th>Records</th><th>By</th><th>Notes</th>
             {% if current_user.role == 'admin' %}<th></th>{% endif %}
           </tr></thead>
           <tbody>
@@ -59,7 +113,7 @@
             <td class="text-secondary small" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ imp.filename }}">
               {{ imp.filename }}
             </td>
-            <td class="text-white">{{ imp.record_count or 0 }}</td>
+            <td class="text-white">{{ '{:,}'.format(imp.record_count or 0) }}</td>
             <td class="text-secondary small">{{ imp.imported_by.username if imp.imported_by else '—' }}</td>
             <td class="text-secondary small">{{ imp.notes or '' }}</td>
             {% if current_user.role == 'admin' %}
@@ -75,7 +129,7 @@
           </tr>
           {% endfor %}
           {% if not recent %}
-          <tr><td colspan="6" class="text-center text-secondary py-4">No imports yet</td></tr>
+          <tr><td colspan="6" class="text-center text-secondary py-4">No updates yet</td></tr>
           {% endif %}
           </tbody>
         </table>
@@ -83,4 +137,67 @@
     </div>
   </div>
 </div>
+
+{% if cust and cust.can_api_update %}
+<script>
+(function () {
+  const box   = document.getElementById('apiProgress');
+  const state = document.getElementById('apiState');
+  const icon  = document.getElementById('apiIcon');
+  const clock = document.getElementById('apiClock');
+  const log   = document.getElementById('apiLog');
+  const btn   = document.getElementById('apiBtn');
+  let timer = null;
+
+  const ICONS = {
+    running:  '<span class="spinner-border spinner-border-sm text-primary"></span>',
+    finished: '<i class="bi bi-check-circle" style="color:#3fb950;"></i>',
+    failed:   '<i class="bi bi-x-octagon" style="color:#f78166;"></i>',
+  };
+
+  function render(j) {
+    if (j.state === 'idle') { box.classList.add('d-none'); return; }
+    box.classList.remove('d-none');
+    icon.innerHTML = ICONS[j.state] || '';
+    state.textContent = {
+      running:  'Update running',
+      finished: 'Update complete',
+      failed:   'Update failed (exit ' + j.returncode + ')',
+    }[j.state] || j.state;
+    clock.textContent = j.finished
+      ? 'started ' + j.started + ', finished ' + j.finished
+      : 'started ' + j.started + ' by ' + j.started_by;
+    log.textContent = (j.lines || []).join('\n') || 'waiting for output...';
+    log.scrollTop = log.scrollHeight;
+
+    if (j.state === 'running') {
+      btn.disabled = true;
+    } else {
+      btn.disabled = false;
+      if (timer) { clearInterval(timer); timer = null; }
+      // The history table above is now stale, so refresh it once.
+      if (j.state === 'finished' && !window.__rsReloaded) {
+        window.__rsReloaded = true;
+        setTimeout(function () { location.reload(); }, 2500);
+      }
+    }
+  }
+
+  function poll() {
+    fetch('{{ url_for("import_api_status") }}')
+      .then(function (r) { return r.json(); })
+      .then(render)
+      .catch(function () {});
+  }
+
+  poll();
+  timer = setInterval(poll, 3000);
+
+  document.getElementById('apiForm').addEventListener('submit', function () {
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Starting...';
+  });
+})();
+</script>
+{% endif %}
 {% endblock %}

@@ -13,6 +13,30 @@ class Customer(db.Model):
     active      = db.Column(db.Boolean, default=True)
     created_at  = db.Column(db.DateTime, default=datetime.utcnow)
 
+    # Which scanner API backs this customer, so the Update page can pull directly
+    # rather than waiting for the weekly cron. Credentials stay in the env file:
+    # only its name is stored here, never a secret.
+    scanner      = db.Column(db.String(32), nullable=True)    # levelblue | cortex
+    scanner_env  = db.Column(db.String(128), nullable=True)   # e.g. .env.cortex.mcr
+    scanner_args = db.Column(db.String(256), nullable=True)   # e.g. --days 30
+
+    SCANNERS = {
+        'levelblue': ('LevelBlue / USM Anywhere', 'levelblue_import.py'),
+        'cortex':    ('Palo Alto Cortex',         'cortex_import.py'),
+    }
+
+    @property
+    def scanner_label(self):
+        return self.SCANNERS.get(self.scanner, ('Not configured', None))[0]
+
+    @property
+    def scanner_script(self):
+        return self.SCANNERS.get(self.scanner, (None, None))[1]
+
+    @property
+    def can_api_update(self):
+        return bool(self.scanner and self.scanner_script)
+
     scan_imports     = db.relationship('ScanImport',     backref='customer', lazy='dynamic')
     risk_acceptances = db.relationship('RiskAcceptance', backref='customer', lazy='dynamic')
     asset_groups     = db.relationship('AssetGroup',     backref='customer', lazy='dynamic')

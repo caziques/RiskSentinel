@@ -42,6 +42,42 @@
       </div>
     </div>
 
+    {# Scanner API, used by the Update page and the nightly cron #}
+    <form action="{{ url_for('admin_customer_scanner', customer_id=c.id) }}"
+          method="post" class="row g-2 align-items-end mb-3">
+      <div class="col-md-3">
+        <label class="form-label small text-secondary mb-1">Scanner API</label>
+        <select name="scanner" class="form-select form-select-sm">
+          <option value="">Not configured (upload only)</option>
+          {% for key, (label, _script) in scanners.items() %}
+          <option value="{{ key }}" {% if c.scanner == key %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label small text-secondary mb-1">Credential file</label>
+        <select name="scanner_env" class="form-select form-select-sm">
+          <option value="">None</option>
+          {% for f in env_files %}
+          <option value="{{ f }}" {% if c.scanner_env == f %}selected{% endif %}>{{ f }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-4">
+        <label class="form-label small text-secondary mb-1">Options</label>
+        <input type="text" name="scanner_args" class="form-control form-control-sm"
+               value="{{ c.scanner_args or '' }}" placeholder="--days 7">
+      </div>
+      <div class="col-md-2 d-grid">
+        <button class="btn btn-sm btn-outline-primary">Save</button>
+      </div>
+      <div class="col-12">
+        <div class="form-text text-secondary">
+          Only the file name is stored. The secrets stay in the file on this host.
+        </div>
+      </div>
+    </form>
+
     {# Users with access #}
     <div class="mb-2">
       <div class="text-secondary small fw-semibold mb-1 text-uppercase" style="letter-spacing:.05em;">Users</div>

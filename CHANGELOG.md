@@ -4,6 +4,20 @@ All notable changes to RiskSentinel (by Beyond Cyber) are documented here.
 
 ---
 
+## [4.17.0] - 2026-09-28
+### Added
+- **Update-API button.** The Update page can now pull straight from the customer's scanner API instead of waiting for the weekly cron or uploading an export. It runs the same importer the cron does, as a subprocess, so a manual update and a scheduled one cannot behave differently.
+- The job runs in the background with live output on the page, polled every three seconds. A Cortex pull takes several minutes, which is far longer than a request can be held open, so leaving the page or closing the browser does not stop it.
+- Per-customer scanner settings under Admin > Customers: which API backs the customer, which credential file to use, and any options such as `--days 30`. Only the file name is stored. **Secrets never enter the database**; they stay in the `.env` file on the host, and the file list is read from disk so each deployment offers what it actually has.
+- A missing credential file is rejected when saving rather than surfacing as a failed job minutes later.
+- Configured on this installation: Nebula and Affinity via LevelBlue, MCR via Cortex. Customers with no API configured keep the upload path and say so on the page.
+
+### Changed
+- **"Import CSV" in the sidebar is now "Update"**, and the page is "Update Vulnerability Data". Uploading a CSV is one of two ways to update, no longer the only one.
+- "Import History" is now "Update History", and its record counts use thousand separators.
+
+---
+
 ## [4.16.2] - 2026-09-28
 ### Fixed
 - **git added to the Docker image.** Mounting a git checkout at `/app` was not enough for Admin > Software Update to work in a container: the image had no `git` binary, so the page failed for a second reason after the first was solved.

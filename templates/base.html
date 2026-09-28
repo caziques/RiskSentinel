@@ -136,7 +136,7 @@
     {% if current_user.role in ('admin', 'analyst') %}
     <div class="nav-section">Data</div>
     <a href="{{ url_for('import_scan') }}" class="nav-link {% if request.endpoint == 'import_scan' %}active{% endif %}">
-      <i class="bi bi-cloud-upload"></i> Import CSV
+      <i class="bi bi-arrow-repeat"></i> Update
     </a>
     {% endif %}
 

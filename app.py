@@ -1,6 +1,8 @@
 import os
+import sys
 import json
 import re
+import threading
 from datetime import datetime, date, timedelta
 from functools import wraps
 
@@ -15,7 +17,7 @@ from werkzeug.utils import secure_filename
 
 from models import db, User, Customer, UserCustomer, ScanImport, Vulnerability, NewsFeed, RiskAcceptance, AssetGroup, AssetGroupMember, RemediationProject, RemediationItem, RemediationSnapshot, SuppressionRule
 
-__version__ = '4.16.2'
+__version__ = '4.17.0'
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'change-me-in-production-8f3k2j')
@@ -90,6 +92,10 @@ def _run_migrations():
         ('vulnerabilities',  'suppressed_at',          'DATETIME'),
         ('vulnerabilities',  'suppressed_by_id',       'INTEGER REFERENCES users(id)'),
         ('vulnerabilities',  'suppression_review_due', 'DATETIME'),
+        # v4.17.0 — per-customer scanner API config for the Update page
+        ('customers',        'scanner',      'VARCHAR(32)'),
+        ('customers',        'scanner_env',  'VARCHAR(128)'),
+        ('customers',        'scanner_args', 'VARCHAR(256)'),
     ]
 
     # Composite indexes. Every hot query filters on (scan_import_id, suppressed)
@@ -1258,7 +1264,8 @@ def import_scan():
             return redirect(request.url)
 
     recent = _cust_scan_q().order_by(desc(ScanImport.imported_at)).limit(10).all()
-    return render_template('import.html', recent=recent)
+    return render_template('import.html', recent=recent,
+                           cust=get_current_customer())
 
 
 @app.route('/import/<int:import_id>/delete', methods=['POST'])
@@ -1754,6 +1761,120 @@ def sla_export_csv():
         buf.getvalue(),
         mimetype='text/csv',
         headers={'Content-Disposition': f'attachment; filename="{filename}"'},
+    )
+
+
+# ── Scanner API updates ──────────────────────────────────────────────────────
+# Imports take minutes, so a request cannot wait for one. The job runs as a
+# subprocess, exactly as the weekly cron does, and the page polls for progress.
+# Running it in-process would mean two SQLAlchemy sessions writing the same
+# SQLite file from one interpreter, which is precisely what WAL is not for.
+
+_api_jobs = {}          # customer_id -> job dict
+_api_jobs_lock = threading.Lock()
+
+
+def _api_job_state(customer_id):
+    with _api_jobs_lock:
+        job = _api_jobs.get(customer_id)
+        return dict(job) if job else None
+
+
+def _run_api_import(customer_id, customer_name, script, env_file, extra_args, started_by):
+    """Run a scanner importer and record progress. Executed on a worker thread."""
+    import subprocess
+    cmd = [sys.executable, os.path.join(APP_ROOT, script), '--customer', customer_name]
+    if env_file:
+        cmd += ['--env-file', env_file]
+    if extra_args:
+        cmd += extra_args.split()
+    cmd += ['--notes', f'Manual API update from the portal ({started_by})']
+
+    with _api_jobs_lock:
+        _api_jobs[customer_id] = dict(
+            state='running', started=datetime.utcnow(), finished=None,
+            customer=customer_name, script=script, started_by=started_by,
+            lines=[], summary='', returncode=None)
+
+    try:
+        proc = subprocess.Popen(cmd, cwd=APP_ROOT, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, text=True, bufsize=1)
+        for line in proc.stdout:
+            line = line.rstrip()
+            if not line or 'Deprecat' in line:
+                continue
+            with _api_jobs_lock:
+                j = _api_jobs.get(customer_id)
+                if j is not None:
+                    j['lines'].append(line)
+                    del j['lines'][:-200]          # keep the tail only
+        proc.wait()
+        rc = proc.returncode
+    except Exception as e:
+        with _api_jobs_lock:
+            j = _api_jobs.get(customer_id)
+            if j is not None:
+                j.update(state='failed', finished=datetime.utcnow(),
+                         summary=f'{type(e).__name__}: {e}', returncode=-1)
+        return
+
+    with _api_jobs_lock:
+        j = _api_jobs.get(customer_id)
+        if j is None:
+            return
+        done = [l for l in j['lines'] if l.startswith('Done')]
+        j.update(state='finished' if rc == 0 else 'failed',
+                 finished=datetime.utcnow(), returncode=rc,
+                 summary=(done[-1] if done else
+                          (j['lines'][-1] if j['lines'] else 'No output')))
+
+
+@app.route('/import/api', methods=['POST'])
+@login_required
+@analyst_required
+@customer_required
+def import_api():
+    cust = get_current_customer()
+    if not cust:
+        flash('Choose a customer first.', 'danger')
+        return redirect(url_for('import_scan'))
+    if not cust.can_api_update:
+        flash(f'No scanner API is configured for {cust.name}. An administrator '
+              f'can set one under Admin > Customers.', 'warning')
+        return redirect(url_for('import_scan'))
+
+    running = _api_job_state(cust.id)
+    if running and running['state'] == 'running':
+        flash('An update is already running for this customer.', 'warning')
+        return redirect(url_for('import_scan'))
+
+    t = threading.Thread(
+        target=_run_api_import,
+        args=(cust.id, cust.name, cust.scanner_script, cust.scanner_env,
+              cust.scanner_args, current_user.username),
+        daemon=True)
+    t.start()
+    flash(f'{cust.scanner_label} update started. Progress appears below; it is '
+          f'safe to leave this page.', 'success')
+    return redirect(url_for('import_scan'))
+
+
+@app.route('/import/api/status')
+@login_required
+@customer_required
+def import_api_status():
+    cust = get_current_customer()
+    job = _api_job_state(cust.id) if cust else None
+    if not job:
+        return jsonify(state='idle')
+    return jsonify(
+        state=job['state'],
+        summary=job['summary'],
+        lines=job['lines'][-25:],
+        started=job['started'].strftime('%H:%M:%S') if job['started'] else None,
+        finished=job['finished'].strftime('%H:%M:%S') if job['finished'] else None,
+        started_by=job['started_by'],
+        returncode=job['returncode'],
     )
 
 
@@ -3793,7 +3914,13 @@ def admin_change_role(user_id):
 def admin_customers():
     customers = Customer.query.order_by(Customer.name).all()
     users     = User.query.order_by(User.username).all()
-    return render_template('admin_customers.html', customers=customers, users=users)
+    # Credential files live beside the application and are never in version
+    # control, so offer whatever this host actually has rather than a fixed list.
+    env_files = sorted(f for f in os.listdir(APP_ROOT)
+                       if f.startswith('.env') and f not in ('.env.example',))
+    return render_template('admin_customers.html', customers=customers,
+                           users=users, env_files=env_files,
+                           scanners=Customer.SCANNERS)
 
 
 @app.route('/admin/customers/add', methods=['POST'])
@@ -3838,6 +3965,32 @@ def admin_rename_customer(customer_id):
         c.name = name
         db.session.commit()
         flash('Customer renamed.', 'success')
+    return redirect(url_for('admin_customers'))
+
+
+@app.route('/admin/customers/<int:customer_id>/scanner', methods=['POST'])
+@login_required
+@admin_required
+def admin_customer_scanner(customer_id):
+    c       = db.get_or_404(Customer, customer_id)
+    scanner = request.form.get('scanner', '').strip()
+    env     = request.form.get('scanner_env', '').strip()
+    args    = request.form.get('scanner_args', '').strip()
+
+    if scanner and scanner not in Customer.SCANNERS:
+        flash('Unknown scanner.', 'danger')
+        return redirect(url_for('admin_customers'))
+    # A missing credential file would only surface as a failed job minutes later,
+    # so reject it here where the administrator can still fix it.
+    if scanner and env and not os.path.exists(os.path.join(APP_ROOT, env)):
+        flash(f'No such credential file: {env}', 'danger')
+        return redirect(url_for('admin_customers'))
+
+    c.scanner      = scanner or None
+    c.scanner_env  = env or None
+    c.scanner_args = args or None
+    db.session.commit()
+    flash(f'Scanner settings saved for {c.name}.', 'success')
     return redirect(url_for('admin_customers'))
 
 
