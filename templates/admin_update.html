@@ -15,11 +15,46 @@
   <i class="bi bi-exclamation-octagon mt-1"></i>
   <div class="small">
     <strong>{{ st.error }}</strong>
+
+    {% if st.remedy == 'container' %}
     <div class="text-secondary mt-2">
-      To enable updates, initialise the application directory as a git clone of
-      your repository. Your database, uploads and credential files are excluded
-      from version control and are never touched by an update.
+      Updating a container means replacing its image, which cannot be done from
+      inside it. Run this on the Docker host:
     </div>
+    <pre class="small mt-2 mb-2 p-2" style="background:#0d1117;border:1px solid #30363d;color:#c9d1d9;overflow:auto;">cd /opt/risksentinel/app          <span class="text-secondary"># the git clone</span>
+git pull
+docker build -t risksentinel:latest .
+docker stop risk-sentinel &amp;&amp; docker rm risk-sentinel
+docker run -d --name risk-sentinel --restart unless-stopped \
+  -p 8080:8080 \
+  -v vuln-portal_vuln_data:/app/instance \
+  -v vuln-portal_vuln_uploads:/app/uploads \
+  -e SECRET_KEY="$SECRET_KEY" \
+  risksentinel:latest</pre>
+    <div class="text-secondary">
+      Keep the volume names exactly as they are. They hold the database and
+      uploads, and a different name silently creates an empty volume rather than
+      failing.
+      <br><br>
+      <strong class="text-white">To make this page work instead</strong>, mount the
+      checkout over the application directory by adding
+      <code>-v /opt/risksentinel/app:/app</code> to the run command. The container
+      then runs the git working tree directly, and updating becomes pull and
+      restart with no rebuild, unless <code>requirements.txt</code> changes.
+    </div>
+    {% else %}
+    <div class="text-secondary mt-2">
+      Convert this installation to a git clone once, and it can self-update from
+      then on:
+    </div>
+    <pre class="small mt-2 mb-2 p-2" style="background:#0d1117;border:1px solid #30363d;color:#c9d1d9;overflow:auto;">cd /path/to/vuln-portal
+curl -O https://raw.githubusercontent.com/caziques/RiskSentinel/main/git-adopt.sh
+chmod +x git-adopt.sh &amp;&amp; ./git-adopt.sh</pre>
+    <div class="text-secondary">
+      It backs up the database and credentials first. Those are excluded from
+      version control, so an update never touches them.
+    </div>
+    {% endif %}
   </div>
 </div>
 {% else %}

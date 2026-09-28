@@ -4,6 +4,16 @@ All notable changes to RiskSentinel (by Beyond Cyber) are documented here.
 
 ---
 
+## [4.16.1] - 2026-09-28
+### Fixed
+- **The update page gave a dead end on containerised installs.** It reported only "This installation is not a git repository, so it cannot self-update", which is true but unhelpful: a container runs code baked into its image, so the remedy is rebuilding the image on the host, not adopting git inside the container.
+- The page now detects which deployment it is, via `/.dockerenv`, and shows the right instructions for each.
+  - **Container**: the exact host commands to pull, rebuild and recreate, including the volume names, with a warning that changing them silently creates an empty volume rather than failing. Also documents mounting the checkout at `/app` so the button works from then on, turning updates into pull-and-restart.
+  - **Bare metal**: the `git-adopt.sh` one-liner.
+- Both branches verified by forcing each code path.
+
+---
+
 ## [4.16.0] - 2026-09-28
 ### Added
 - **Software Update from git**, at Admin > Software Update. Shows the installed version, branch, commit and remote; checks the repository for waiting changes; lists them with author and message; and applies them on one click.

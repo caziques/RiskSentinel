@@ -15,7 +15,7 @@ from werkzeug.utils import secure_filename
 
 from models import db, User, Customer, UserCustomer, ScanImport, Vulnerability, NewsFeed, RiskAcceptance, AssetGroup, AssetGroupMember, RemediationProject, RemediationItem, RemediationSnapshot, SuppressionRule
 
-__version__ = '4.16.0'
+__version__ = '4.16.1'
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'change-me-in-production-8f3k2j')
@@ -1783,11 +1783,23 @@ def _git(*args, timeout=120):
 def _git_status():
     """Current repository state, or why it cannot be read."""
     st = {'is_repo': False, 'remote': '', 'branch': '', 'commit': '', 'subject': '',
-          'when': '', 'dirty': [], 'behind': 0, 'ahead': 0, 'error': ''}
+          'when': '', 'dirty': [], 'behind': 0, 'ahead': 0, 'error': '',
+          'in_container': False, 'remedy': ''}
+
+    # A container running code baked into an image is the common case, and
+    # "not a git repository" alone is true but useless: the remedy differs from
+    # a bare-metal install, so report which situation this actually is.
+    st['in_container'] = os.path.exists('/.dockerenv')
 
     ok, _ = _git('rev-parse', '--is-inside-work-tree')
     if not ok:
-        st['error'] = 'This installation is not a git repository, so it cannot self-update.'
+        if st['in_container']:
+            st['error'] = ('This container runs code built into its image, so it '
+                           'cannot update itself in place.')
+            st['remedy'] = 'container'
+        else:
+            st['error'] = 'This installation is not a git repository, so it cannot self-update.'
+            st['remedy'] = 'adopt'
         return st
     st['is_repo'] = True
 
