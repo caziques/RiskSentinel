@@ -17,7 +17,7 @@ from werkzeug.utils import secure_filename
 
 from models import db, User, Customer, UserCustomer, ScanImport, Vulnerability, NewsFeed, RiskAcceptance, AssetGroup, AssetGroupMember, RemediationProject, RemediationItem, RemediationSnapshot, SuppressionRule
 
-__version__ = '4.17.0'
+__version__ = '4.17.1'
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'change-me-in-production-8f3k2j')
@@ -3652,17 +3652,32 @@ def suppression_review():
     # Deliberately not scoped to the latest import: a suppression recorded against
     # an earlier import must still surface for review rather than quietly disappear.
     latest = _latest_import()
+    now    = datetime.utcnow()
+    page   = request.args.get('page', 1, type=int)
     supp_import_ids = [i.id for i in _cust_scan_q().all()]
-    rows = (Vulnerability.query
-            .filter(Vulnerability.suppressed == True,
-                    Vulnerability.scan_import_id.in_(supp_import_ids))
-            .order_by(Vulnerability.suppression_review_due.is_(None),
-                      Vulnerability.suppression_review_due)
-            .all()) if supp_import_ids else []
 
-    now = datetime.utcnow()
-    overdue = [v for v in rows if v.suppression_review_due and v.suppression_review_due <= now]
-    undated = [v for v in rows if not v.suppression_review_due]
+    if supp_import_ids:
+        base = Vulnerability.query.filter(
+            Vulnerability.suppressed == True,
+            Vulnerability.scan_import_id.in_(supp_import_ids))
+        # Counting in SQL rather than by materialising every suppressed finding:
+        # a large tenant has tens of thousands, and the page only shows a page of
+        # them. The table used to load and render the lot, which broke it.
+        total_count   = base.count()
+        overdue_count = base.filter(Vulnerability.suppression_review_due != None,
+                                    Vulnerability.suppression_review_due <= now).count()
+        undated_count = base.filter(Vulnerability.suppression_review_due == None).count()
+        # Clamp rather than render an empty table for a page past the end.
+        page = max(1, min(page, max(1, -(-total_count // 100))))
+        pagination = (base
+                      .order_by(Vulnerability.suppression_review_due.is_(None),
+                                Vulnerability.suppression_review_due)
+                      .paginate(page=page, per_page=100, error_out=False))
+        rows = pagination.items
+    else:
+        total_count = overdue_count = undated_count = 0
+        pagination = None
+        rows = []
 
     cust = get_current_customer()
     rules = (SuppressionRule.query
@@ -3671,11 +3686,13 @@ def suppression_review():
                        SuppressionRule.review_due).all())
     return render_template('suppressions.html',
                            rows=rows, now=now,
+                           pagination=pagination,
+                           total_count=total_count,
                            rules=rules,
                            rules_active=sum(1 for r in rules if not r.revoked),
                            rules_overdue=sum(1 for r in rules if r.is_overdue),
-                           overdue_count=len(overdue),
-                           undated_count=len(undated),
+                           overdue_count=overdue_count,
+                           undated_count=undated_count,
                            review_days=SUPPRESSION_REVIEW_DAYS,
                            latest=latest)
 

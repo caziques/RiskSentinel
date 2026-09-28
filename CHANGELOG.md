@@ -4,6 +4,13 @@ All notable changes to RiskSentinel (by Beyond Cyber) are documented here.
 
 ---
 
+## [4.17.1] - 2026-09-28
+### Fixed
+- **The suppression review table was unbounded.** It loaded and rendered every suppressed finding for the customer in one table, the same failure already fixed on the vulnerabilities, plugins and remediation pages. It is now paged at 100 with a pager, and a page number past the end clamps to the last page rather than showing an empty table.
+- The three counts at the top are now counted in SQL rather than by materialising the whole set, so the page cost no longer scales with the number of suppressions, and they carry thousand separators.
+
+---
+
 ## [4.17.0] - 2026-09-28
 ### Added
 - **Update-API button.** The Update page can now pull straight from the customer's scanner API instead of waiting for the weekly cron or uploading an export. It runs the same importer the cron does, as a subprocess, so a manual update and a scheduled one cannot behave differently.
