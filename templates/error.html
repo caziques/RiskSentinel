@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}{{ code }} Error{% endblock %}
+
+{% block content %}
+<div class="text-center py-5">
+  <div style="font-size:5rem;font-weight:800;color:#30363d;">{{ code }}</div>
+  <h4 class="text-white mt-2">{{ message }}</h4>
+  <p class="text-secondary mt-1">
+    {% if code == 403 %}You don't have permission to access this page.
+    {% elif code == 404 %}The page you're looking for doesn't exist.
+    {% elif code == 413 %}The file you uploaded is too large.
+    {% else %}Something went wrong.{% endif %}
+  </p>
+  <a href="{{ url_for('dashboard') }}" class="btn btn-primary mt-3">
+    <i class="bi bi-house me-1"></i> Back to Dashboard
+  </a>
+</div>
+{% endblock %}

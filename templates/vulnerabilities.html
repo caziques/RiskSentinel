@@ -1,0 +1,171 @@
+{% extends "base.html" %}
+{% block title %}Vulnerabilities{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-4">
+  <div>
+    <h4 class="fw-bold mb-0">Vulnerabilities</h4>
+    <small class="text-secondary">{{ '{:,}'.format(total) }} records found</small>
+  </div>
+</div>
+
+<!-- Filters -->
+<div class="card p-3 mb-4">
+  <form method="get" class="row g-2 align-items-end">
+    <input type="hidden" name="import_id" value="{{ current_import_id or '' }}">
+    <input type="hidden" name="exclude_accepted" value="{{ '1' if exclude_accepted else '0' }}">
+    <div class="col-md-3">
+      <label class="form-label small text-secondary mb-1">Search</label>
+      <input type="text" name="search" class="form-control form-control-sm" placeholder="Plugin, asset, IP, CVE…" value="{{ search }}">
+    </div>
+    <div class="col-md-2">
+      <label class="form-label small text-secondary mb-1">Severity</label>
+      <select name="severity" class="form-select form-select-sm">
+        <option value="">All</option>
+        {% for s in ['Critical','High','Medium','Low','Informational'] %}
+        <option value="{{ s }}" {% if severity == s %}selected{% endif %}>{{ s }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-2">
+      <label class="form-label small text-secondary mb-1">Asset</label>
+      <input type="text" name="asset" class="form-control form-control-sm" placeholder="Filter by asset" value="{{ asset_filter }}">
+    </div>
+    <div class="col-md-2">
+      <label class="form-label small text-secondary mb-1">Suppressed</label>
+      <select name="suppressed" class="form-select form-select-sm">
+        <option value="false" {% if show_suppressed=='false' %}selected{% endif %}>Active only</option>
+        <option value="true"  {% if show_suppressed=='true'  %}selected{% endif %}>Suppressed only</option>
+        <option value="all"   {% if show_suppressed=='all'   %}selected{% endif %}>All</option>
+      </select>
+    </div>
+    <div class="col-md-2">
+      <label class="form-label small text-secondary mb-1">Scan Import</label>
+      <select name="import_id" class="form-select form-select-sm">
+        {% for imp in all_imports %}
+        <option value="{{ imp.id }}" {% if current_import_id == imp.id %}selected{% endif %}>
+          {{ imp.report_date or imp.imported_at.strftime('%Y-%m-%d') }} ({{ imp.record_count }})
+        </option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-1">
+      <button type="submit" class="btn btn-sm btn-primary w-100">Filter</button>
+    </div>
+  </form>
+</div>
+
+<!-- Exclude accepted toggle -->
+<div class="d-flex align-items-center gap-3 mb-3">
+  {% if exclude_accepted %}
+  <a href="?import_id={{ current_import_id }}&severity={{ severity }}&asset={{ asset_filter }}&suppressed={{ show_suppressed }}&search={{ search }}&exclude_accepted=0"
+     class="btn btn-sm btn-warning">
+    <i class="bi bi-shield-fill-check me-1"></i> Excluding Accepted Risk
+    {% if accepted_count %}<span class="badge bg-dark ms-1">{{ accepted_count }}</span>{% endif %}
+  </a>
+  {% else %}
+  <a href="?import_id={{ current_import_id }}&severity={{ severity }}&asset={{ asset_filter }}&suppressed={{ show_suppressed }}&search={{ search }}&exclude_accepted=1"
+     class="btn btn-sm btn-outline-secondary">
+    <i class="bi bi-shield-check me-1"></i> Exclude Accepted Risk
+  </a>
+  {% endif %}
+</div>
+
+<!-- Quick severity filters -->
+<div class="d-flex gap-2 mb-3">
+  {% for s, color in [('Critical','danger'),('High','warning'),('Medium','info'),('Low','success')] %}
+  <a href="?import_id={{ current_import_id }}&severity={{ s }}&suppressed={{ show_suppressed }}"
+     class="btn btn-sm btn-outline-{{ color }} {% if severity == s %}active{% endif %}">
+    {{ s }}
+  </a>
+  {% endfor %}
+  {% if severity %}
+  <a href="?import_id={{ current_import_id }}&suppressed={{ show_suppressed }}" class="btn btn-sm btn-outline-secondary">Clear</a>
+  {% endif %}
+</div>
+
+<div class="card">
+  <div class="table-responsive">
+    <table id="vulnTable" class="table table-hover table-sm mb-0" style="width:100%">
+      <thead>
+        <tr>
+          <th>Severity</th>
+          <th>Vulnerability / Plugin</th>
+          <th>Asset</th>
+          <th>IP</th>
+          <th>Family</th>
+          <th>CVSS V3</th>
+          <th>CVSS V4</th>
+          <th>First Seen</th>
+          <th>Last Seen</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for v in vulns %}
+      <tr>
+        <td><span class="badge sev-badge-{{ v.risk_factor }}">{{ v.risk_factor }}</span></td>
+        <td style="max-width:280px;" title="{{ v.plugin_name or v.plugin_id or v.vulnerability_id }}">
+          <div style="display:flex;align-items:center;gap:6px;min-width:0;">
+            <a href="{{ url_for('vulnerability_detail', vuln_id=v.id) }}"
+               class="text-white text-decoration-none"
+               style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;">
+              {{ v.plugin_name or v.plugin_id or v.vulnerability_id or '—' }}
+            </a>
+            {% if v.vulnerability_id and v.vulnerability_id.startswith('CVE-') %}
+            <a href="https://nvd.nist.gov/vuln/detail/{{ v.vulnerability_id }}"
+               target="_blank" rel="noopener"
+               class="text-info flex-shrink-0"
+               title="View {{ v.vulnerability_id }} on NVD/NIST"
+               onclick="event.stopPropagation();">
+              <i class="bi bi-box-arrow-up-right" style="font-size:.7rem;"></i>
+            </a>
+            {% endif %}
+          </div>
+        </td>
+        <td>
+          <a href="{{ url_for('asset_detail', asset_name=v.asset) }}" class="text-white text-decoration-none">{{ v.asset }}</a>
+        </td>
+        <td class="text-secondary small">{{ v.ip_address }}</td>
+        <td class="text-secondary small">{{ v.plugin_family }}</td>
+        <td class="text-secondary small">{% if v.cvss_v3_score %}<span class="badge bg-secondary">{{ v.cvss_v3_score }}</span>{% else %}—{% endif %}</td>
+        <td class="text-secondary small">{% if v.cvss_v4_score %}<span class="badge bg-secondary">{{ v.cvss_v4_score }}</span>{% else %}—{% endif %}</td>
+        <td class="text-secondary small">{{ v.first_seen.strftime('%Y-%m-%d') if v.first_seen else '—' }}</td>
+        <td class="text-secondary small">{{ v.last_seen.strftime('%Y-%m-%d') if v.last_seen else '—' }}</td>
+        <td><a href="{{ url_for('vulnerability_detail', vuln_id=v.id) }}" class="btn btn-outline-secondary btn-sm py-0">Detail</a></td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Pagination -->
+{% if pagination.pages > 1 %}
+<nav class="mt-3">
+  <ul class="pagination pagination-sm justify-content-center">
+    {% if pagination.has_prev %}
+    <li class="page-item"><a class="page-link" href="?{{ request.query_string.decode().replace('page='+pagination.page|string, 'page='+(pagination.page-1)|string) or ('page='+(pagination.page-1)|string) }}">‹ Prev</a></li>
+    {% endif %}
+    <li class="page-item disabled"><span class="page-link">Page {{ pagination.page }} of {{ pagination.pages }}</span></li>
+    {% if pagination.has_next %}
+    <li class="page-item"><a class="page-link" href="?{{ request.query_string.decode() }}&page={{ pagination.page+1 }}">Next ›</a></li>
+    {% endif %}
+  </ul>
+</nav>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+$(document).ready(function() {
+  $('#vulnTable').DataTable({
+    paging: false,
+    info: false,
+    searching: false,
+    order: [],
+    columnDefs: [{ orderable: false, targets: -1 }]
+  });
+});
+</script>
+{% endblock %}

@@ -1,0 +1,529 @@
+{% extends "base.html" %}
+{% block title %}Asset Inventory{% endblock %}
+
+{% block head %}
+<style>
+  .asset-row { cursor: pointer; }
+  .asset-row:hover td { background: #21262d !important; }
+  .app-pill { font-size: .68rem; background: #21262d; color: #8b949e;
+              border: 1px solid #30363d; border-radius: 20px; padding: .15rem .5rem;
+              white-space: nowrap; }
+  .app-pill.active { background:#1f6feb33; color:#58a6ff; border-color:#1f6feb88; }
+  .change-badge-new { background:#23863622; color:#3fb950; border:1px solid #23863655;
+                      font-size:.75rem; border-radius:4px; padding:.1rem .4rem; }
+  .change-badge-rem { background:#da363322; color:#f78166; border:1px solid #da363355;
+                      font-size:.75rem; border-radius:4px; padding:.1rem .4rem; }
+  .change-badge-os  { background:#d2992222; color:#d29922; border:1px solid #d2992255;
+                      font-size:.75rem; border-radius:4px; padding:.1rem .4rem; }
+  .inv-kpi { cursor: pointer; transition: border-color .15s, transform .1s; }
+  .inv-kpi:hover { transform: translateY(-2px); filter: brightness(1.1); }
+  .inv-kpi.active-filter { box-shadow: 0 0 0 2px #1f6feb; }
+  .os-row, .app-inv-row { cursor: pointer; }
+  .os-row:hover td, .app-inv-row:hover td { background: #21262d !important; }
+  .os-row.active-filter td, .app-inv-row.active-filter td { background: #1f6feb18 !important; }
+  #activeFilterBar { display:none; }
+</style>
+{% endblock %}
+
+{% block content %}
+{% if no_data %}
+<div class="text-center py-5">
+  <i class="bi bi-hdd-stack text-secondary" style="font-size:4rem;"></i>
+  <h4 class="mt-3 text-white">No data yet</h4>
+  <p class="text-secondary">Import a scan to build the asset inventory.</p>
+</div>
+{% else %}
+
+<!-- Header -->
+<div class="d-flex align-items-center justify-content-between mb-4 flex-wrap gap-2">
+  <div>
+    <h4 class="fw-bold mb-0">Asset Inventory &amp; Fingerprinting</h4>
+    <small class="text-secondary">{{ latest.report_date }} · OS detection, CPE software, version tracking</small>
+  </div>
+  <select class="form-select form-select-sm" style="width:auto;"
+          onchange="window.location='?import_id='+this.value">
+    {% for imp in all_imports %}
+    <option value="{{ imp.id }}" {% if imp.id == current_import_id %}selected{% endif %}>
+      {{ imp.report_date or imp.imported_at.strftime('%Y-%m-%d') }}
+    </option>
+    {% endfor %}
+  </select>
+</div>
+
+<!-- KPIs -->
+<div class="row g-3 mb-4">
+  <div class="col-6 col-md-3">
+    <div class="card inv-kpi h-100 p-3 text-center" id="kpiAll" onclick="clearFilter()">
+      <div class="text-secondary small mb-1">Total Assets</div>
+      <div class="display-5 fw-bold text-white">{{ total_assets }}</div>
+      <div class="text-secondary" style="font-size:.7rem;">click to show all</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="card inv-kpi h-100 p-3 text-center" style="border-color:#1f6feb;"
+         id="kpiOs" onclick="filterByKpi('os')">
+      <div class="text-secondary small mb-1">OS Identified</div>
+      <div class="display-5 fw-bold" style="color:#1f6feb;">{{ os_identified }}</div>
+      <div class="text-secondary" style="font-size:.7rem;">{{ unique_os_types }} versions · click to filter</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="card inv-kpi h-100 p-3 text-center" style="border-color:#238636;"
+         id="kpiApps" onclick="filterByKpi('apps')">
+      <div class="text-secondary small mb-1">Applications</div>
+      <div class="display-5 fw-bold" style="color:#238636;">{{ unique_apps }}</div>
+      <div class="text-secondary" style="font-size:.7rem;">unique CPE types · click to filter</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="card inv-kpi h-100 p-3 text-center" style="border-color:#d29922;"
+         id="kpiChanges" onclick="scrollToChanges()">
+      <div class="text-secondary small mb-1">Changes</div>
+      <div class="display-5 fw-bold" style="color:#d29922;">
+        {{ (new_software|length + removed_software|length + os_changes|length) if has_prev else '—' }}
+      </div>
+      <div class="text-secondary" style="font-size:.7rem;">
+        {% if has_prev %}vs previous scan · click to view{% else %}no prior scan{% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Charts row -->
+<div class="row g-4 mb-4">
+  <!-- OS Distribution -->
+  <div class="col-lg-5">
+    <div class="card p-3 h-100">
+      <h6 class="text-secondary mb-1">
+        <i class="bi bi-pc-display me-1"></i>OS Distribution
+        <small class="fw-normal">(click to filter)</small>
+      </h6>
+      {% if os_dist %}
+      <canvas id="osChart" style="cursor:pointer;" height="200"></canvas>
+      {% else %}
+      <p class="text-secondary small mt-2">No OS identification data available.</p>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Top Applications -->
+  <div class="col-lg-7">
+    <div class="card p-3 h-100">
+      <h6 class="text-secondary mb-1">
+        <i class="bi bi-grid me-1"></i>Top Applications Detected
+        <small class="fw-normal">(click to filter)</small>
+      </h6>
+      <canvas id="appsChart" style="cursor:pointer;" height="200"></canvas>
+    </div>
+  </div>
+</div>
+
+<!-- Week-over-week changes -->
+{% if has_prev and (new_software or removed_software or os_changes) %}
+<div class="card p-3 mb-4" id="changesCard">
+  <h6 class="text-secondary mb-3">
+    <i class="bi bi-arrow-left-right me-1"></i>Changes Since Previous Scan
+  </h6>
+  <div class="row g-3">
+    {% if new_software %}
+    <div class="col-md-4">
+      <div class="small fw-semibold mb-2" style="color:#3fb950;">
+        <i class="bi bi-plus-circle me-1"></i>New Software Detected ({{ new_software|length }})
+      </div>
+      <div class="d-flex flex-wrap gap-1">
+        {% for sw in new_software %}
+        <span class="change-badge-new" style="cursor:pointer;" onclick="setAppFilter('{{ sw|replace("'","\\'")|e }}')">{{ sw }}</span>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+    {% if removed_software %}
+    <div class="col-md-4">
+      <div class="small fw-semibold mb-2" style="color:#f78166;">
+        <i class="bi bi-dash-circle me-1"></i>Software No Longer Detected ({{ removed_software|length }})
+      </div>
+      <div class="d-flex flex-wrap gap-1">
+        {% for sw in removed_software %}
+        <span class="change-badge-rem">{{ sw }}</span>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+    {% if os_changes %}
+    <div class="col-md-4">
+      <div class="small fw-semibold mb-2" style="color:#d29922;">
+        <i class="bi bi-arrow-repeat me-1"></i>OS Version Changes ({{ os_changes|length }})
+      </div>
+      {% for c in os_changes %}
+      <div class="small mb-1" style="cursor:pointer;" onclick="setOsFilter('{{ c.after|replace("'","\\'")|e }}')">
+        <span class="text-white fw-semibold">{{ c.asset }}</span><br>
+        <span class="text-secondary" style="font-size:.72rem;">{{ c.before }}</span>
+        <i class="bi bi-arrow-right text-secondary" style="font-size:.7rem;"></i>
+        <span style="color:#d29922;font-size:.72rem;">{{ c.after }}</span>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% elif has_prev %}
+<div class="alert alert-secondary py-2 mb-4">
+  <i class="bi bi-check-circle me-1"></i>
+  <small>No software or OS changes detected compared to the previous scan.</small>
+</div>
+{% endif %}
+
+<!-- OS + Application tables row -->
+<div class="row g-4 mb-4">
+  <!-- Detected OS versions -->
+  <div class="col-lg-5">
+    <div class="card p-3 h-100">
+      <h6 class="text-secondary mb-3"><i class="bi bi-hdd me-1"></i>OS Inventory <small class="fw-normal">(click to filter)</small></h6>
+      <div class="table-responsive">
+        <table class="table table-sm mb-0">
+          <thead><tr><th>Operating System</th><th>Hosts</th></tr></thead>
+          <tbody>
+          {% for os, count in os_dist.items() %}
+          <tr class="os-row" data-os="{{ os }}" onclick="setOsFilter('{{ os|replace("'","\\'")|e }}')">
+            <td class="text-white small">{{ os }}</td>
+            <td>
+              <div class="d-flex align-items-center gap-2">
+                <div class="progress flex-grow-1" style="height:6px;max-width:80px;">
+                  <div class="progress-bar bg-primary"
+                       style="width:{{ (count / (os_dist.values()|list|max) * 100)|int }}%"></div>
+                </div>
+                <span class="text-white">{{ count }}</span>
+              </div>
+            </td>
+          </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Top applications -->
+  <div class="col-lg-7">
+    <div class="card p-3 h-100">
+      <h6 class="text-secondary mb-3"><i class="bi bi-collection me-1"></i>Application Inventory <small class="fw-normal">(click to filter)</small></h6>
+      <div class="table-responsive" style="max-height:320px;overflow-y:auto;">
+        <table class="table table-sm mb-0">
+          <thead style="position:sticky;top:0;background:#161b22;z-index:1;">
+            <tr><th>Application</th><th>Vendor</th><th>Hosts</th></tr>
+          </thead>
+          <tbody>
+          {% for app in top_apps %}
+          <tr class="app-inv-row" data-app="{{ app.label }}"
+              onclick="setAppFilter('{{ app.label|replace("'","\\'")|e }}')">
+            <td class="text-white small">{{ app.product.title() or app.label }}</td>
+            <td class="text-secondary small">{{ app.vendor.title() }}</td>
+            <td>
+              <div class="d-flex align-items-center gap-2">
+                <div class="progress flex-grow-1" style="height:5px;max-width:60px;">
+                  <div class="progress-bar bg-success"
+                       style="width:{{ (app.host_count / (top_apps[0].host_count or 1) * 100)|int }}%"></div>
+                </div>
+                <span class="text-white">{{ app.host_count }}</span>
+              </div>
+            </td>
+          </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Active filter bar -->
+<div id="activeFilterBar" class="d-flex align-items-center gap-2 mb-2 px-1">
+  <span class="text-secondary small">Filtering by:</span>
+  <span id="activeFilterLabel" class="badge" style="background:#1f6feb;font-size:.8rem;"></span>
+  <button class="btn btn-sm btn-outline-secondary py-0 px-2" onclick="clearFilter()">
+    <i class="bi bi-x"></i> Clear
+  </button>
+</div>
+
+<!-- Per-asset fingerprint table -->
+<div class="card">
+  <div class="p-3 border-bottom d-flex align-items-center justify-content-between"
+       style="border-color:#30363d!important;">
+    <h6 class="mb-0 text-secondary">
+      <i class="bi bi-table me-1"></i>Asset Fingerprints
+      <span id="tableCount" class="text-white ms-1">{{ asset_rows|length }}</span>
+    </h6>
+    <div class="d-flex align-items-center gap-2">
+      <input type="text" id="quickSearch" class="form-control form-control-sm"
+             style="width:220px;" placeholder="Search assets…"
+             oninput="applySearch(this.value)">
+    </div>
+  </div>
+  <div class="table-responsive">
+    <table id="inventoryTable" class="table table-sm table-hover mb-0" style="width:100%">
+      <thead>
+        <tr>
+          <th>Asset</th>
+          <th>IP</th>
+          <th>Operating System</th>
+          <th>Applications Detected</th>
+          <th>C</th>
+          <th>H</th>
+          <th>M</th>
+          <th>Vulns</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for r in asset_rows %}
+      <tr class="asset-row"
+          data-os="{{ r.os|lower }}"
+          data-apps="{{ r.apps|join('|')|lower }}"
+          data-has-os="{{ '1' if r.os else '0' }}"
+          data-has-apps="{{ '1' if r.apps else '0' }}"
+          data-asset="{{ r.asset|lower }}"
+          data-ip="{{ r.ip|lower }}"
+          onclick="window.location='{{ url_for('asset_detail', asset_name=r.asset) }}?import_id={{ current_import_id }}'">
+        <td class="fw-semibold text-white">{{ r.asset }}</td>
+        <td class="text-secondary small font-monospace">{{ r.ip }}</td>
+        <td class="small">
+          {% if r.os %}
+          <span class="text-white">{{ r.os }}</span>
+          {% else %}
+          <span class="text-secondary">—</span>
+          {% endif %}
+        </td>
+        <td>
+          <div class="d-flex flex-wrap gap-1">
+            {% for app in r.apps[:6] %}
+            <span class="app-pill" data-appname="{{ app|lower }}"
+                  onclick="event.stopPropagation();setAppFilter('{{ app|replace("'","\\'")|e }}')">{{ app }}</span>
+            {% endfor %}
+            {% if r.app_count > 6 %}
+            <span class="app-pill" style="color:#58a6ff;">+{{ r.app_count - 6 }} more</span>
+            {% endif %}
+            {% if not r.apps %}
+            <span class="text-secondary small">—</span>
+            {% endif %}
+          </div>
+        </td>
+        <td>
+          {% if r.critical %}
+          <span class="badge sev-badge-Critical" style="font-size:.65rem;">{{ r.critical }}</span>
+          {% else %}<span class="text-secondary">—</span>{% endif %}
+        </td>
+        <td>
+          {% if r.high %}
+          <span class="badge sev-badge-High" style="font-size:.65rem;">{{ r.high }}</span>
+          {% else %}<span class="text-secondary">—</span>{% endif %}
+        </td>
+        <td>
+          {% if r.medium %}
+          <span class="badge sev-badge-Medium" style="font-size:.65rem;">{{ r.medium }}</span>
+          {% else %}<span class="text-secondary">—</span>{% endif %}
+        </td>
+        <td class="text-secondary">{{ r.vuln_count }}</td>
+        <td onclick="event.stopPropagation()">
+          <a href="{{ url_for('asset_detail', asset_name=r.asset) }}?import_id={{ current_import_id }}"
+             class="btn btn-outline-secondary btn-sm py-0">Detail</a>
+        </td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div id="noResults" class="text-center text-secondary py-4" style="display:none;">
+    No assets match the current filter.
+  </div>
+</div>
+
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if not no_data %}
+<script>
+const osDistData  = {{ os_dist_json|safe }};
+const topAppsData = {{ top_apps_json|safe }};
+
+// ── Filter state ──────────────────────────────────────────────────────────────
+let activeOsFilter  = null;
+let activeAppFilter = null;
+let activeKpiFilter = null;
+let activeSearch    = '';
+
+function applyFilters() {
+  const rows   = document.querySelectorAll('#inventoryTable tbody tr.asset-row');
+  const osFilt = activeOsFilter  ? activeOsFilter.toLowerCase()  : null;
+  const apFilt = activeAppFilter ? activeAppFilter.toLowerCase() : null;
+  const sq     = activeSearch.toLowerCase();
+  let visible  = 0;
+
+  rows.forEach(row => {
+    let show = true;
+    if (osFilt)  show = show && row.dataset.os.includes(osFilt);
+    if (apFilt)  show = show && row.dataset.apps.includes(apFilt);
+    if (activeKpiFilter === 'os')   show = show && row.dataset.hasOs  === '1';
+    if (activeKpiFilter === 'apps') show = show && row.dataset.hasApps === '1';
+    if (sq) show = show && (
+      row.dataset.asset.includes(sq) || row.dataset.ip.includes(sq) ||
+      row.dataset.os.includes(sq)    || row.dataset.apps.includes(sq)
+    );
+    row.style.display = show ? '' : 'none';
+    if (show) visible++;
+  });
+
+  document.getElementById('tableCount').textContent = visible;
+  document.getElementById('noResults').style.display = visible === 0 ? '' : 'none';
+
+  // Update active filter bar
+  const bar = document.getElementById('activeFilterBar');
+  const lbl = document.getElementById('activeFilterLabel');
+  const hasFilter = osFilt || apFilt || activeKpiFilter || sq;
+  bar.style.display = hasFilter ? 'flex' : 'none';
+  if (osFilt)       lbl.textContent = 'OS: ' + activeOsFilter;
+  else if (apFilt)  lbl.textContent = 'App: ' + activeAppFilter;
+  else if (activeKpiFilter === 'os')   lbl.textContent = 'Has OS data';
+  else if (activeKpiFilter === 'apps') lbl.textContent = 'Has applications';
+  else if (sq)      lbl.textContent = 'Search: ' + activeSearch;
+  else lbl.textContent = '';
+
+  // Highlight active OS table row
+  document.querySelectorAll('.os-row').forEach(r => {
+    r.classList.toggle('active-filter', osFilt && r.dataset.os.toLowerCase() === osFilt);
+  });
+  // Highlight active app table row
+  document.querySelectorAll('.app-inv-row').forEach(r => {
+    r.classList.toggle('active-filter', apFilt && r.dataset.app.toLowerCase() === apFilt);
+  });
+  // Highlight active app pills
+  document.querySelectorAll('.app-pill[data-appname]').forEach(p => {
+    p.classList.toggle('active', apFilt && p.dataset.appname === apFilt);
+  });
+  // KPI card active state
+  ['kpiAll','kpiOs','kpiApps'].forEach(id => {
+    document.getElementById(id)?.classList.remove('active-filter');
+  });
+  if (activeKpiFilter === 'os')   document.getElementById('kpiOs')?.classList.add('active-filter');
+  if (activeKpiFilter === 'apps') document.getElementById('kpiApps')?.classList.add('active-filter');
+}
+
+function setOsFilter(os) {
+  activeOsFilter  = os;
+  activeAppFilter = null;
+  activeKpiFilter = null;
+  applyFilters();
+  document.getElementById('inventoryTable').closest('.card').scrollIntoView({ behavior:'smooth', block:'start' });
+}
+
+function setAppFilter(app) {
+  activeAppFilter = app;
+  activeOsFilter  = null;
+  activeKpiFilter = null;
+  applyFilters();
+  document.getElementById('inventoryTable').closest('.card').scrollIntoView({ behavior:'smooth', block:'start' });
+}
+
+function filterByKpi(type) {
+  activeKpiFilter = type;
+  activeOsFilter  = null;
+  activeAppFilter = null;
+  applyFilters();
+}
+
+function clearFilter() {
+  activeOsFilter = activeAppFilter = activeKpiFilter = null;
+  activeSearch   = '';
+  document.getElementById('quickSearch').value = '';
+  applyFilters();
+}
+
+function applySearch(val) {
+  activeSearch    = val;
+  activeOsFilter  = null;
+  activeAppFilter = null;
+  activeKpiFilter = null;
+  applyFilters();
+}
+
+function scrollToChanges() {
+  const el = document.getElementById('changesCard');
+  if (el) el.scrollIntoView({ behavior:'smooth', block:'start' });
+}
+
+// ── OS distribution bar (clickable) ──────────────────────────────────────────
+{% if os_dist %}
+const osChartInst = new Chart(document.getElementById('osChart'), {
+  type: 'bar',
+  data: {
+    labels: Object.keys(osDistData).map(s => s.length > 38 ? s.slice(0,36)+'…' : s),
+    datasets: [{
+      label: 'Hosts',
+      data: Object.values(osDistData),
+      backgroundColor: ['#1f6feb99','#238636aa','#d29922aa','#da3633aa','#8957e5aa',
+                        '#0dcaf0aa','#fd7e14aa','#6e7681aa','#58a6ffaa','#3fb950aa'],
+      borderColor:     ['#1f6feb','#238636','#d29922','#da3633','#8957e5',
+                        '#0dcaf0','#fd7e14','#6e7681','#58a6ff','#3fb950'],
+      borderWidth: 1,
+      hoverBorderWidth: 2,
+    }]
+  },
+  options: {
+    indexAxis: 'y',
+    responsive: true,
+    plugins: { legend: { display: false },
+               tooltip: { callbacks: { label: ctx => `${ctx.raw} host${ctx.raw!==1?'s':''}` } } },
+    scales: {
+      x: { grid: { color: '#30363d' }, beginAtZero: true, ticks: { stepSize: 1 } },
+      y: { grid: { color: '#30363d' }, ticks: { font: { size: 10 } } }
+    }
+  }
+});
+document.getElementById('osChart').onclick = function(e) {
+  const pts = osChartInst.getElementsAtEventForMode(e, 'nearest', { intersect: true }, true);
+  if (pts.length) {
+    const os = Object.keys(osDistData)[pts[0].index];
+    activeOsFilter && activeOsFilter === os ? clearFilter() : setOsFilter(os);
+  }
+};
+{% endif %}
+
+// ── Top applications bar (clickable) ─────────────────────────────────────────
+const appsChartInst = new Chart(document.getElementById('appsChart'), {
+  type: 'bar',
+  data: {
+    labels: topAppsData.map(d => d[0].length > 32 ? d[0].slice(0,30)+'…' : d[0]),
+    datasets: [{
+      label: 'Hosts',
+      data: topAppsData.map(d => d[1]),
+      backgroundColor: '#238636aa',
+      borderColor: '#238636',
+      borderWidth: 1,
+      hoverBackgroundColor: '#238636ff',
+      hoverBorderWidth: 2,
+    }]
+  },
+  options: {
+    indexAxis: 'y',
+    responsive: true,
+    plugins: { legend: { display: false },
+               tooltip: { callbacks: {
+                 label: ctx => `${ctx.raw} host${ctx.raw!==1?'s':''}`,
+                 footer: () => 'Click to filter assets'
+               }}},
+    scales: {
+      x: { grid: { color: '#30363d' }, beginAtZero: true, ticks: { stepSize: 1 } },
+      y: { grid: { color: '#30363d' }, ticks: { font: { size: 10 } } }
+    }
+  }
+});
+document.getElementById('appsChart').onclick = function(e) {
+  const pts = appsChartInst.getElementsAtEventForMode(e, 'nearest', { intersect: true }, true);
+  if (pts.length) {
+    const app = topAppsData[pts[0].index][0];
+    activeAppFilter && activeAppFilter === app ? clearFilter() : setAppFilter(app);
+  }
+};
+</script>
+{% endif %}
+{% endblock %}

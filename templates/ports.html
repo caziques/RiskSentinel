@@ -1,0 +1,337 @@
+{% extends "base.html" %}
+{% block title %}Open Ports{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-4">
+  <div>
+    <h4 class="fw-bold mb-0">Open Ports</h4>
+    <small class="text-secondary">Network exposure analysis · {{ port_rows|length }} port/protocol combinations across {{ hosts_count }} hosts</small>
+  </div>
+  <div class="d-flex gap-2 align-items-center">
+    <select class="form-select form-select-sm" style="width:auto;"
+            onchange="window.location='?import_id='+this.value">
+      {% for imp in all_imports %}
+      <option value="{{ imp.id }}" {% if current_import_id == imp.id %}selected{% endif %}>
+        {{ imp.report_date or imp.imported_at.strftime('%Y-%m-%d') }}
+      </option>
+      {% endfor %}
+    </select>
+  </div>
+</div>
+
+<!-- KPIs -->
+<div class="row g-3 mb-4">
+  <div class="col-6 col-md-3 col-lg">
+    <a href="?import_id={{ current_import_id }}" class="text-decoration-none">
+      <div class="card p-3 text-center kpi-clickable">
+        <div class="text-secondary small mb-1">Unique Ports</div>
+        <div class="display-5 fw-bold text-white">{{ total_ports }}</div>
+        <div class="text-secondary" style="font-size:.7rem;">click to view all</div>
+      </div>
+    </a>
+  </div>
+  <div class="col-6 col-md-3 col-lg">
+    <a href="?import_id={{ current_import_id }}&proto=tcp" class="text-decoration-none">
+      <div class="card p-3 text-center kpi-clickable" style="border-color:#1f6feb;">
+        <div class="text-secondary small mb-1">TCP Ports</div>
+        <div class="display-5 fw-bold" style="color:#1f6feb;">{{ tcp_ports }}</div>
+        <div class="text-secondary" style="font-size:.7rem;">click to filter</div>
+      </div>
+    </a>
+  </div>
+  <div class="col-6 col-md-3 col-lg">
+    <a href="?import_id={{ current_import_id }}&proto=udp" class="text-decoration-none">
+      <div class="card p-3 text-center kpi-clickable" style="border-color:#d29922;">
+        <div class="text-secondary small mb-1">UDP Ports</div>
+        <div class="display-5 fw-bold" style="color:#d29922;">{{ udp_ports }}</div>
+        <div class="text-secondary" style="font-size:.7rem;">click to filter</div>
+      </div>
+    </a>
+  </div>
+  <div class="col-6 col-md-3 col-lg">
+    <a href="#byHost" data-bs-toggle="tab" class="text-decoration-none" onclick="switchToHost()">
+      <div class="card p-3 text-center kpi-clickable" style="border-color:#238636;">
+        <div class="text-secondary small mb-1">Hosts Exposed</div>
+        <div class="display-5 fw-bold" style="color:#238636;">{{ hosts_count }}</div>
+        <div class="text-secondary" style="font-size:.7rem;">click to view hosts</div>
+      </div>
+    </a>
+  </div>
+  <div class="col-6 col-md-3 col-lg">
+    <a href="{{ url_for('vulnerabilities') }}?import_id={{ current_import_id }}" class="text-decoration-none">
+      <div class="card p-3 text-center kpi-clickable">
+        <div class="text-secondary small mb-1">Total Findings</div>
+        <div class="display-5 fw-bold text-secondary">{{ total_findings }}</div>
+        <div class="text-secondary" style="font-size:.7rem;">click to view all</div>
+      </div>
+    </a>
+  </div>
+</div>
+
+<!-- Charts -->
+<div class="row g-4 mb-4">
+  <div class="col-md-8">
+    <div class="card p-3 h-100">
+      <h6 class="text-secondary mb-3">Top Ports by Host Count</h6>
+      <canvas id="portBarChart" height="160"></canvas>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="card p-3 h-100">
+      <h6 class="text-secondary mb-3">TCP vs UDP</h6>
+      <canvas id="protoChart" height="220"></canvas>
+    </div>
+  </div>
+</div>
+
+<!-- Tabs -->
+<ul class="nav nav-tabs border-secondary mb-0" id="portTabs">
+  <li class="nav-item">
+    <a class="nav-link active" data-bs-toggle="tab" href="#byPort">By Port ({{ port_rows|length }})</a>
+  </li>
+  <li class="nav-item">
+    <a class="nav-link" data-bs-toggle="tab" href="#byHost">By Host ({{ host_rows|length }})</a>
+  </li>
+</ul>
+
+<!-- Filter bar -->
+<div class="card border-top-0 rounded-top-0 p-3 mb-0" style="border-radius:0 0 8px 8px;">
+  <form method="get" class="row g-2 align-items-end">
+    <input type="hidden" name="import_id" value="{{ current_import_id }}">
+    <div class="col-md-4">
+      <input type="text" name="search" class="form-control form-control-sm"
+             placeholder="Search port, asset, IP…" value="{{ search }}">
+    </div>
+    <div class="col-md-2">
+      <select name="proto" class="form-select form-select-sm">
+        <option value="">All protocols</option>
+        <option value="tcp" {% if proto_filter=='tcp' %}selected{% endif %}>TCP only</option>
+        <option value="udp" {% if proto_filter=='udp' %}selected{% endif %}>UDP only</option>
+      </select>
+    </div>
+    <div class="col-auto">
+      <button type="submit" class="btn btn-sm btn-primary">Filter</button>
+      {% if search or proto_filter %}
+      <a href="?import_id={{ current_import_id }}" class="btn btn-sm btn-outline-secondary">Clear</a>
+      {% endif %}
+    </div>
+  </form>
+</div>
+
+<div class="tab-content mt-0">
+  <!-- BY PORT -->
+  <div class="tab-pane fade show active" id="byPort">
+    <div class="card border-top-0 rounded-top-0">
+      <div class="table-responsive">
+        <table id="portTable" class="table table-hover table-sm mb-0" style="width:100%">
+          <thead>
+            <tr>
+              <th>Port</th>
+              <th>Protocol</th>
+              <th>Service</th>
+              <th>Hosts</th>
+              <th>Findings</th>
+              <th>Exposure</th>
+              <th>Risk</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+          {% set max_hosts = host_rows[0].port_count if host_rows else 1 %}
+          {% for r in port_rows %}
+          {% set service = well_known.get(r[0], '') %}
+          {% set pct = (r[2] / hosts_count * 100)|int if hosts_count else 0 %}
+          {% set is_risky = r[0] in ['21','23','3389','5985','5986','445','1433','3306','5432','6379','22'] %}
+          <tr>
+            <td>
+              <a href="{{ url_for('port_detail', port=r[0], proto=r[1]) }}?import_id={{ current_import_id }}"
+                 class="fw-bold font-monospace text-white text-decoration-none port-link">{{ r[0] }}</a>
+            </td>
+            <td>
+              <span class="badge {% if r[1]=='tcp' %}bg-primary{% else %}bg-warning text-dark{% endif %} text-uppercase" style="font-size:.7rem;">
+                {{ r[1] }}
+              </span>
+            </td>
+            <td class="text-secondary small">
+              {% if service %}<span class="badge bg-secondary">{{ service }}</span>
+              {% else %}—{% endif %}
+            </td>
+            <td class="text-white">{{ r[2] }}</td>
+            <td class="text-secondary">{{ r[3] }}</td>
+            <td style="min-width:120px;">
+              <div class="d-flex align-items-center gap-2">
+                <div class="progress flex-grow-1" style="height:6px;max-width:80px;">
+                  <div class="progress-bar {% if pct > 80 %}bg-danger{% elif pct > 40 %}bg-warning{% else %}bg-info{% endif %}"
+                       style="width:{{ pct }}%"></div>
+                </div>
+                <small class="text-secondary">{{ pct }}%</small>
+              </div>
+            </td>
+            <td>
+              {% if is_risky %}
+              <span class="badge" style="background:#da363344;color:#da3633;border:1px solid #da363366;">
+                <i class="bi bi-exclamation-triangle-fill me-1"></i>Sensitive
+              </span>
+              {% endif %}
+            </td>
+            <td>
+              <a href="{{ url_for('vulnerabilities') }}?import_id={{ current_import_id }}&search={{ r[0] }}"
+                 class="btn btn-outline-secondary btn-sm py-0">Vulns</a>
+            </td>
+          </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- BY HOST -->
+  <div class="tab-pane fade" id="byHost">
+    <div class="card border-top-0 rounded-top-0">
+      <div class="table-responsive">
+        <table id="hostTable" class="table table-hover table-sm mb-0" style="width:100%">
+          <thead>
+            <tr>
+              <th>Asset</th>
+              <th>IP Address</th>
+              <th>Open Ports</th>
+              <th>Port List</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+          {% set max_pc = host_rows[0].port_count if host_rows else 1 %}
+          {% for h in host_rows %}
+          <tr>
+            <td>
+              <a href="{{ url_for('asset_detail', asset_name=h.asset) }}?import_id={{ current_import_id }}"
+                 class="text-white text-decoration-none fw-semibold">{{ h.asset }}</a>
+            </td>
+            <td class="text-secondary small">{{ h.ip_address }}</td>
+            <td>
+              <div class="d-flex align-items-center gap-2">
+                <div class="progress" style="height:6px;width:70px;">
+                  <div class="progress-bar bg-info" style="width:{{ (h.port_count / max_pc * 100)|int }}%"></div>
+                </div>
+                <span class="text-white fw-semibold">{{ h.port_count }}</span>
+              </div>
+            </td>
+            <td style="max-width:500px;">
+              {% if h.port_list %}
+              <div class="d-flex flex-wrap gap-1">
+                {% for p in h.port_list.split(',')[:40] %}
+                {% set p = p.strip() %}
+                {% set is_sensitive = p in ['21','23','3389','5985','5986','445','1433','3306','5432','6379','22'] %}
+                <a href="{{ url_for('port_detail', port=p, proto='tcp') }}?import_id={{ current_import_id }}"
+                   class="badge font-monospace text-decoration-none {% if is_sensitive %}sev-badge-High{% else %}bg-secondary{% endif %}"
+                   style="font-size:.7rem;" title="{{ well_known.get(p, 'Port '+p) }} — click to drill down">{{ p }}</a>
+                {% endfor %}
+                {% if h.port_list.split(',')|length > 40 %}
+                <span class="badge bg-secondary">+{{ h.port_list.split(',')|length - 40 }} more</span>
+                {% endif %}
+              </div>
+              {% else %}—{% endif %}
+            </td>
+            <td>
+              <a href="{{ url_for('asset_detail', asset_name=h.asset) }}?import_id={{ current_import_id }}"
+                 class="btn btn-outline-secondary btn-sm py-0">Detail</a>
+            </td>
+          </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const topChart   = {{ top_chart_json|safe }};
+const protoDist  = {{ proto_dist_json|safe }};
+
+// Top ports bar chart
+new Chart(document.getElementById('portBarChart'), {
+  type: 'bar',
+  data: {
+    labels: topChart.map(d => d[0]),
+    datasets: [{
+      label: 'Hosts',
+      data: topChart.map(d => d[1]),
+      backgroundColor: topChart.map(d => {
+        const port = d[0].split('/')[0];
+        const sensitive = ['21','23','3389','5985','5986','445','1433','3306','5432','6379'];
+        return sensitive.includes(port) ? '#da363388' : '#1f6feb88';
+      }),
+      borderColor: topChart.map(d => {
+        const port = d[0].split('/')[0];
+        const sensitive = ['21','23','3389','5985','5986','445','1433','3306','5432','6379'];
+        return sensitive.includes(port) ? '#da3633' : '#1f6feb';
+      }),
+      borderWidth: 1,
+    }]
+  },
+  options: {
+    responsive: true,
+    plugins: { legend: { display: false }, tooltip: {
+      callbacks: { title: ctx => ctx[0].label, label: ctx => `${ctx.raw} host${ctx.raw !== 1 ? 's' : ''}` }
+    }},
+    scales: {
+      x: { grid: { color: '#30363d' }, ticks: { font: { family: 'monospace', size: 11 } } },
+      y: { grid: { color: '#30363d' }, beginAtZero: true, ticks: { stepSize: 1 } }
+    }
+  }
+});
+
+// Protocol donut
+new Chart(document.getElementById('protoChart'), {
+  type: 'doughnut',
+  data: {
+    labels: protoDist.map(d => d[0].toUpperCase()),
+    datasets: [{
+      data: protoDist.map(d => d[1]),
+      backgroundColor: ['#1f6feb', '#d29922', '#6e7681'],
+      borderColor: '#161b22', borderWidth: 2
+    }]
+  },
+  options: {
+    cutout: '60%',
+    plugins: { legend: { position: 'bottom', labels: { font: { size: 12 }, padding: 16 } } }
+  }
+});
+
+function switchToHost() {
+  setTimeout(() => {
+    document.querySelector('[href="#byHost"]').click();
+  }, 50);
+}
+
+$(document).ready(function() {
+  $('#portTable').DataTable({
+    order: [[3, 'desc']],
+    pageLength: 50,
+    columnDefs: [{ orderable: false, targets: [-1, -2] }]
+  });
+  $('#hostTable').DataTable({
+    order: [[2, 'desc']],
+    pageLength: 50,
+    columnDefs: [{ orderable: false, targets: [-1, -2] }]
+  });
+});
+
+// Make chart bars clickable
+const portBarChartEl = document.getElementById('portBarChart');
+portBarChartEl.style.cursor = 'pointer';
+portBarChartEl.onclick = function(e) {
+  const chart = Chart.getChart('portBarChart');
+  const pts = chart.getElementsAtEventForMode(e, 'nearest', { intersect: true }, true);
+  if (pts.length) {
+    const label = chart.data.labels[pts[0].index]; // e.g. "445/tcp"
+    const [port, proto] = label.split('/');
+    window.location = `/ports/${port}/${proto}?import_id={{ current_import_id }}`;
+  }
+};
+</script>
+{% endblock %}

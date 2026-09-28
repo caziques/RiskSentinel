@@ -1,0 +1,529 @@
+{% extends "base.html" %}
+{% block title %}SLA / Age Tracking{% endblock %}
+
+{% block head %}
+<style>
+  .status-Breached  { color: #f78166; }
+  .status-At.Risk   { color: #d29922; }
+  .status-On.Track  { color: #3fb950; }
+  .badge-Breached   { background: #da3633 !important; }
+  .badge-AtRisk     { background: #d29922 !important; color:#000 !important; }
+  .badge-OnTrack    { background: #238636 !important; }
+  .badge-NA         { background: #6e7681 !important; }
+  .sla-row          { cursor: pointer; }
+  .sla-row:hover td { background: #21262d !important; }
+  .overdue-bar      { height: 4px; border-radius: 2px; background: #da3633; }
+
+  /* Print / Save-as-PDF: drop the app chrome, keep the dark report look */
+  @media print {
+    #sidebar, .topbar, .print-hide { display: none !important; }
+    #main-content { margin-left: 0 !important; }
+    body, html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .card { break-inside: avoid; }
+    canvas { max-width: 100% !important; }
+    a { text-decoration: none !important; }
+  }
+  @page { margin: 12mm; }
+</style>
+{% endblock %}
+
+{% block content %}
+{% if no_data %}
+<div class="text-center py-5">
+  <i class="bi bi-clock text-secondary" style="font-size:4rem;"></i>
+  <h4 class="mt-3 text-white">No data yet</h4>
+  <p class="text-secondary">Import a scan to begin SLA tracking.</p>
+</div>
+{% else %}
+
+<div id="slaReport">
+<!-- Header -->
+<div class="d-flex align-items-center justify-content-between mb-4 flex-wrap gap-2">
+  <div>
+    <h4 class="fw-bold mb-0">Age &amp; SLA Tracking</h4>
+    <small class="text-secondary">{{ current_customer.name + ' · ' if current_customer }}{{ latest.report_date }} · {{ latest.filename }}</small>
+  </div>
+  <div class="d-flex align-items-center gap-2 pdf-hide">
+    <select class="form-select form-select-sm" style="width:auto;"
+            onchange="window.location='?import_id='+this.value">
+      {% for imp in all_imports %}
+      <option value="{{ imp.id }}" {% if imp.id == current_import_id %}selected{% endif %}>
+        {{ imp.report_date or imp.imported_at.strftime('%Y-%m-%d') }}
+      </option>
+      {% endfor %}
+    </select>
+    <button id="pdfBtn" class="btn btn-sm btn-outline-danger" onclick="exportSlaPdf(this)">
+      <i class="bi bi-file-earmark-pdf me-1"></i> Export PDF
+    </button>
+    <a id="csvBtn" class="btn btn-sm btn-outline-success"
+       href="{{ url_for('sla_export_csv', import_id=current_import_id,
+                        exclude_accepted='1' if exclude_accepted else '0') }}">
+      <i class="bi bi-file-earmark-spreadsheet me-1"></i> Export Breached CSV
+    </a>
+  </div>
+</div>
+
+<!-- Exclude accepted toggle -->
+<div class="d-flex align-items-center gap-3 mb-3 pdf-hide">
+  {% if exclude_accepted %}
+  <a href="?import_id={{ current_import_id }}&severity={{ severity_filter }}&status={{ status_filter }}&exclude_accepted=0"
+     class="btn btn-sm btn-warning">
+    <i class="bi bi-shield-fill-check me-1"></i> Excluding Accepted Risk
+    {% if accepted_count %}<span class="badge bg-dark ms-1">{{ '{:,}'.format(accepted_count) }}</span>{% endif %}
+  </a>
+  <span class="text-secondary small">
+    Findings covered by an active risk acceptance are removed from every figure on this page.
+  </span>
+  {% else %}
+  <a href="?import_id={{ current_import_id }}&severity={{ severity_filter }}&status={{ status_filter }}&exclude_accepted=1"
+     class="btn btn-sm btn-outline-secondary">
+    <i class="bi bi-shield-check me-1"></i> Exclude Accepted Risk
+  </a>
+  {% endif %}
+</div>
+
+<!-- SLA Targets reference -->
+<div class="card p-3 mb-4" style="border-color:#30363d;">
+  <div class="d-flex flex-wrap gap-4 align-items-center mb-2">
+    <span class="text-secondary small fw-semibold" style="min-width:120px;">Internal:</span>
+    {% for sev, days in sla_days.items() %}
+    <span class="small">
+      <span class="badge sev-badge-{{ sev }} me-1">{{ sev }}</span>
+      <span class="text-white">{{ days }} days</span>
+    </span>
+    {% endfor %}
+  </div>
+  <div class="d-flex flex-wrap gap-4 align-items-center">
+    <span class="small fw-semibold" style="min-width:120px;color:#58a6ff;">
+      <i class="bi bi-globe2 me-1"></i>Internet-facing:
+    </span>
+    {% for sev, days in sla_days_ext.items() %}
+    <span class="small">
+      <span class="badge sev-badge-{{ sev }} me-1">{{ sev }}</span>
+      <span class="text-white">{{ '48 hours' if days == 2 else days ~ ' days' }}</span>
+    </span>
+    {% endfor %}
+  </div>
+  <div class="text-secondary mt-2" style="font-size:.72rem;">
+    NBL-IT-020 section 11.
+    {% if ext_asset_count %}
+      {{ ext_asset_count }} asset{{ 's' if ext_asset_count != 1 }} in the Internet-Facing group.
+    {% else %}
+      No assets are tagged internet-facing yet. Add them to an asset group named
+      &quot;Internet-Facing&quot; for the shorter tier to apply.
+    {% endif %}
+  </div>
+</div>
+
+<!-- KPI Cards -->
+<div class="row g-3 mb-4">
+  <div class="col-6 col-md-4 col-lg-2">
+    <a href="?import_id={{ current_import_id }}" class="text-decoration-none">
+      <div class="card kpi-card h-100 p-3 text-center">
+        <div class="text-secondary small mb-1">Active Findings</div>
+        <div class="display-5 fw-bold text-white">{{ '{:,}'.format(total) }}</div>
+        <div class="text-secondary" style="font-size:.7rem;">C/H/M/L only</div>
+      </div>
+    </a>
+  </div>
+  <div class="col-6 col-md-4 col-lg-2">
+    <a href="?import_id={{ current_import_id }}&status=breached" class="text-decoration-none">
+      <div class="card kpi-card h-100 p-3 text-center" style="border-color:#da3633;">
+        <div class="text-secondary small mb-1">SLA Breached</div>
+        <div class="display-5 fw-bold" style="color:#da3633;">{{ '{:,}'.format(breached) }}</div>
+        <div class="text-secondary" style="font-size:.7rem;">past deadline</div>
+      </div>
+    </a>
+  </div>
+  <div class="col-6 col-md-4 col-lg-2">
+    <a href="?import_id={{ current_import_id }}&status=at_risk" class="text-decoration-none">
+      <div class="card kpi-card h-100 p-3 text-center" style="border-color:#d29922;">
+        <div class="text-secondary small mb-1">At Risk</div>
+        <div class="display-5 fw-bold" style="color:#d29922;">{{ '{:,}'.format(at_risk) }}</div>
+        <div class="text-secondary" style="font-size:.7rem;">within 7d of SLA</div>
+      </div>
+    </a>
+  </div>
+  <div class="col-6 col-md-4 col-lg-2">
+    <a href="?import_id={{ current_import_id }}&status=on_track" class="text-decoration-none">
+      <div class="card kpi-card h-100 p-3 text-center" style="border-color:#238636;">
+        <div class="text-secondary small mb-1">On Track</div>
+        <div class="display-5 fw-bold" style="color:#238636;">{{ '{:,}'.format(on_track) }}</div>
+        <div class="text-secondary" style="font-size:.7rem;">within SLA</div>
+      </div>
+    </a>
+  </div>
+  <div class="col-6 col-md-4 col-lg-2">
+    <div class="card h-100 p-3 text-center">
+      <div class="text-secondary small mb-1">Avg Age</div>
+      <div class="display-5 fw-bold text-white">{{ avg_age }}<span class="fs-6 text-secondary">d</span></div>
+      <div class="text-secondary" style="font-size:.7rem;">across all active</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-4 col-lg-2">
+    <div class="card h-100 p-3 text-center">
+      <div class="text-secondary small mb-1">Oldest Finding</div>
+      <div class="display-5 fw-bold text-white">{{ '{:,}'.format(max_age) }}<span class="fs-6 text-secondary">d</span></div>
+      <div class="text-secondary" style="font-size:.7rem;">days since first seen</div>
+    </div>
+  </div>
+</div>
+
+<!-- Charts row -->
+<div class="row g-4 mb-4">
+  <!-- Age distribution -->
+  <div class="col-lg-7">
+    <div class="card p-3 h-100">
+      <h6 class="text-secondary mb-3"><i class="bi bi-bar-chart me-1"></i>Age Distribution by Severity</h6>
+      <canvas id="ageDist" height="200"></canvas>
+    </div>
+  </div>
+
+  <!-- SLA compliance donut -->
+  <div class="col-lg-5">
+    <div class="card p-3 h-100">
+      <h6 class="text-secondary mb-3"><i class="bi bi-pie-chart me-1"></i>Overall SLA Status</h6>
+      <div class="row align-items-center">
+        <div class="col-7">
+          <canvas id="slaDonut" height="180"></canvas>
+        </div>
+        <div class="col-5">
+          <div class="d-flex flex-column gap-2">
+            <div>
+              <div class="d-flex justify-content-between small mb-1">
+                <span style="color:#da3633;">Breached</span>
+                <span class="text-white fw-bold">{{ '{:,}'.format(breached) }}</span>
+              </div>
+              <div class="progress" style="height:5px;">
+                <div class="progress-bar bg-danger" style="width:{{ (breached / (total or 1) * 100)|int }}%;"></div>
+              </div>
+            </div>
+            <div>
+              <div class="d-flex justify-content-between small mb-1">
+                <span style="color:#d29922;">At Risk</span>
+                <span class="text-white fw-bold">{{ '{:,}'.format(at_risk) }}</span>
+              </div>
+              <div class="progress" style="height:5px;">
+                <div class="progress-bar bg-warning" style="width:{{ (at_risk / (total or 1) * 100)|int }}%;"></div>
+              </div>
+            </div>
+            <div>
+              <div class="d-flex justify-content-between small mb-1">
+                <span style="color:#238636;">On Track</span>
+                <span class="text-white fw-bold">{{ '{:,}'.format(on_track) }}</span>
+              </div>
+              <div class="progress" style="height:5px;">
+                <div class="progress-bar bg-success" style="width:{{ (on_track / (total or 1) * 100)|int }}%;"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Per-severity SLA compliance -->
+<div class="card p-3 mb-4">
+  <h6 class="text-secondary mb-3"><i class="bi bi-table me-1"></i>SLA Compliance by Severity</h6>
+  <div class="table-responsive">
+    <table class="table table-sm mb-0">
+      <thead>
+        <tr>
+          <th>Severity</th>
+          <th>SLA Target</th>
+          <th>Total</th>
+          <th>On Track</th>
+          <th>At Risk</th>
+          <th>Breached</th>
+          <th>Compliance</th>
+          <th>Avg Age</th>
+          <th>Max Age</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for sev in ['Critical','High','Medium','Low'] %}
+      {% set c = sla_compliance[sev] %}
+      <tr>
+        <td><span class="badge sev-badge-{{ sev }}">{{ sev }}</span></td>
+        <td class="text-secondary">
+          {{ c.sla_days }}d
+          {% if c.ext_count %}
+          <span class="ms-1" style="color:#58a6ff;font-size:.75rem;"
+                title="{{ '{:,}'.format(c.ext_count) }} internet-facing finding(s) at the shorter tier">
+            <i class="bi bi-globe2"></i>
+            {{ '48h' if c.sla_days_ext == 2 else c.sla_days_ext ~ 'd' }}
+          </span>
+          {% endif %}
+        </td>
+        <td class="text-white fw-semibold">{{ '{:,}'.format(c.total) }}</td>
+        <td style="color:#3fb950;">{{ '{:,}'.format(c.on_track) }}</td>
+        <td style="color:#d29922;">{{ '{:,}'.format(c.at_risk) }}</td>
+        <td style="color:#f78166;">{{ '{:,}'.format(c.breached) }}</td>
+        <td>
+          <div class="d-flex align-items-center gap-2">
+            <div class="progress flex-grow-1" style="height:8px;max-width:100px;">
+              <div class="progress-bar
+                {% if c.compliance_pct >= 80 %}bg-success{% elif c.compliance_pct >= 50 %}bg-warning{% else %}bg-danger{% endif %}"
+                   style="width:{{ c.compliance_pct }}%;"></div>
+            </div>
+            <span class="small text-white fw-semibold">{{ c.compliance_pct }}%</span>
+          </div>
+        </td>
+        <td class="text-white">{{ c.avg_age }}d</td>
+        <td class="text-secondary">{{ c.max_age }}d</td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Age trend over time -->
+{% if age_trend_json != '[]' %}
+<div class="card p-3 mb-4">
+  <h6 class="text-secondary mb-3"><i class="bi bi-graph-up me-1"></i>Average Age Over Time (days at scan date)</h6>
+  <canvas id="ageTrend" height="100"></canvas>
+</div>
+{% endif %}
+
+<!-- Filter bar -->
+<div class="card p-3 mb-3">
+  <form method="get" class="row g-2 align-items-end">
+    <input type="hidden" name="import_id" value="{{ current_import_id }}">
+    <div class="col-md-3">
+      <label class="form-label small text-secondary mb-1">Severity</label>
+      <select name="severity" class="form-select form-select-sm">
+        <option value="">All severities</option>
+        {% for s in ['Critical','High','Medium','Low'] %}
+        <option value="{{ s }}" {% if severity_filter==s %}selected{% endif %}>{{ s }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-3">
+      <label class="form-label small text-secondary mb-1">SLA Status</label>
+      <select name="status" class="form-select form-select-sm">
+        <option value="">All statuses</option>
+        <option value="breached" {% if status_filter=='breached' %}selected{% endif %}>Breached</option>
+        <option value="at_risk"  {% if status_filter=='at_risk'  %}selected{% endif %}>At Risk</option>
+        <option value="on_track" {% if status_filter=='on_track' %}selected{% endif %}>On Track</option>
+      </select>
+    </div>
+    <div class="col-auto d-flex gap-2">
+      <button type="submit" class="btn btn-sm btn-primary">Filter</button>
+      {% if severity_filter or status_filter %}
+      <a href="?import_id={{ current_import_id }}" class="btn btn-sm btn-outline-secondary">Clear</a>
+      {% endif %}
+    </div>
+  </form>
+</div>
+
+<!-- Findings table -->
+<div class="card">
+  <div class="table-responsive">
+    <table id="slaTable" class="table table-sm table-hover mb-0" style="width:100%">
+      <thead>
+        <tr>
+          <th>Status</th>
+          <th>Asset</th>
+          <th>Plugin</th>
+          <th>Severity</th>
+          <th>CVSS</th>
+          <th>First Seen</th>
+          <th>Age (days)</th>
+          <th>SLA (days)</th>
+          <th>Overdue by</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for f in findings %}
+      <tr class="sla-row {% if f.status == 'Breached' %}table-danger-subtle{% endif %}"
+          style="{% if f.status == 'Breached' %}border-left:3px solid #da3633;{% elif f.status == 'At Risk' %}border-left:3px solid #d29922;{% endif %}"
+          onclick="window.location='/vulnerabilities/{{ f.id }}'">
+        <td>
+          {% if f.status == 'Breached' %}
+            <span class="badge badge-Breached"><i class="bi bi-exclamation-triangle-fill me-1"></i>Breached</span>
+          {% elif f.status == 'At Risk' %}
+            <span class="badge badge-AtRisk"><i class="bi bi-clock-fill me-1"></i>At Risk</span>
+          {% elif f.status == 'On Track' %}
+            <span class="badge badge-OnTrack"><i class="bi bi-check-circle-fill me-1"></i>On Track</span>
+          {% else %}
+            <span class="badge badge-NA">N/A</span>
+          {% endif %}
+        </td>
+        <td>
+          <a href="{{ url_for('asset_detail', asset_name=f.asset) }}?import_id={{ current_import_id }}"
+             onclick="event.stopPropagation()" class="text-white fw-semibold text-decoration-none">{{ f.asset }}</a>
+          {% if f.internet_facing %}
+          <i class="bi bi-globe2 ms-1" style="color:#58a6ff;" title="Internet-facing, shorter SLA tier"></i>
+          {% endif %}
+          <div class="text-secondary" style="font-size:.72rem;">{{ f.ip or '' }}</div>
+        </td>
+        <td style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.82rem;"
+            class="text-white" title="{{ f.plugin_name }}">{{ f.plugin_name }}</td>
+        <td><span class="badge sev-badge-{{ f.risk_factor }}">{{ f.risk_factor }}</span></td>
+        <td class="text-white small">{{ f.cvss3 or '—' }}</td>
+        <td class="text-secondary small">{{ f.first_seen.strftime('%Y-%m-%d') if f.first_seen else '—' }}</td>
+        <td class="fw-semibold {% if f.days_open and f.sla_days and f.days_open > f.sla_days %}text-danger{% else %}text-white{% endif %}">
+          {{ f.days_open if f.days_open is not none else '—' }}
+        </td>
+        <td class="text-secondary small">{{ f.sla_days or '—' }}</td>
+        <td>
+          {% if f.days_overdue %}
+          <span class="small fw-bold" style="color:#f78166;">+{{ '{:,}'.format(f.days_overdue) }}d</span>
+          {% elif f.status == 'At Risk' and f.days_open is not none and f.sla_days %}
+          <span class="small" style="color:#d29922;">{{ f.sla_days - f.days_open }}d left</span>
+          {% else %}
+          <span class="text-secondary small">—</span>
+          {% endif %}
+        </td>
+        <td onclick="event.stopPropagation()">
+          <a href="{{ url_for('plugin_detail', plugin_id=f.plugin_id) }}?import_id={{ current_import_id }}"
+             class="btn btn-outline-secondary btn-sm py-0">Plugin</a>
+        </td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+</div><!-- /#slaReport -->
+
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if not no_data %}
+<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+<script>
+const SLA_PDF_NAME = "{{ ('SLA-' ~ ((current_customer.name ~ '-') if current_customer else '') ~ (latest.report_date or latest.imported_at.strftime('%Y-%m-%d'))) | replace(' ','_') }}.pdf";
+
+async function exportSlaPdf(btn) {
+  const el = document.getElementById('slaReport');
+  if (!el || !window.html2canvas || !window.jspdf) { alert('PDF libraries failed to load.'); return; }
+  const hidden = el.querySelectorAll('.pdf-hide');
+  const orig = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Generating…';
+  hidden.forEach(e => e.style.visibility = 'hidden');   // keep layout, hide controls
+  try {
+    const canvas = await html2canvas(el, {
+      backgroundColor: '#0f1117',
+      scale: 2,
+      useCORS: true,
+      scrollX: 0, scrollY: -window.scrollY,
+      windowWidth: el.scrollWidth,
+    });
+    const { jsPDF } = window.jspdf;
+    const pdf = new jsPDF('p', 'mm', 'a4');
+    const pw = pdf.internal.pageSize.getWidth();
+    const ph = pdf.internal.pageSize.getHeight();
+    const imgW = pw;
+    const imgH = canvas.height * imgW / canvas.width;
+    const img = canvas.toDataURL('image/jpeg', 0.92);
+    let heightLeft = imgH, position = 0;
+    pdf.addImage(img, 'JPEG', 0, position, imgW, imgH);
+    heightLeft -= ph;
+    while (heightLeft > 0) {
+      position = heightLeft - imgH;
+      pdf.addPage();
+      pdf.setFillColor(15, 17, 23);
+      pdf.rect(0, 0, pw, ph, 'F');
+      pdf.addImage(img, 'JPEG', 0, position, imgW, imgH);
+      heightLeft -= ph;
+    }
+    pdf.save(SLA_PDF_NAME);
+  } catch (e) {
+    alert('PDF export failed: ' + e.message);
+  } finally {
+    hidden.forEach(e => e.style.visibility = '');
+    btn.disabled = false;
+    btn.innerHTML = orig;
+  }
+}
+
+const ageDist   = {{ age_dist_json|safe }};
+const ageTrend  = {{ age_trend_json|safe }};
+
+// ── Age distribution stacked bar ──────────────────────────────────────────────
+new Chart(document.getElementById('ageDist'), {
+  type: 'bar',
+  data: {
+    labels: ageDist.labels,
+    datasets: [
+      { label: 'Critical', data: ageDist.data.Critical, backgroundColor: '#da3633cc', stack: 's' },
+      { label: 'High',     data: ageDist.data.High,     backgroundColor: '#d29922cc', stack: 's' },
+      { label: 'Medium',   data: ageDist.data.Medium,   backgroundColor: '#1f6febcc', stack: 's' },
+      { label: 'Low',      data: ageDist.data.Low,      backgroundColor: '#238636cc', stack: 's' },
+    ]
+  },
+  options: {
+    responsive: true,
+    plugins: { legend: { position: 'bottom', labels: { font: { size: 11 } } } },
+    scales: {
+      x: { stacked: true, grid: { color: '#30363d' } },
+      y: { stacked: true, grid: { color: '#30363d' }, beginAtZero: true, ticks: { stepSize: 1 } }
+    }
+  }
+});
+
+// ── SLA status donut ──────────────────────────────────────────────────────────
+new Chart(document.getElementById('slaDonut'), {
+  type: 'doughnut',
+  data: {
+    labels: ['Breached', 'At Risk', 'On Track'],
+    datasets: [{
+      data: [{{ '{:,}'.format(breached) }}, {{ '{:,}'.format(at_risk) }}, {{ '{:,}'.format(on_track) }}],
+      backgroundColor: ['#da3633', '#d29922', '#238636'],
+      borderColor: '#161b22', borderWidth: 2
+    }]
+  },
+  options: {
+    cutout: '60%',
+    plugins: { legend: { display: false } }
+  }
+});
+
+// ── Age trend line ────────────────────────────────────────────────────────────
+if (ageTrend.length > 1 && document.getElementById('ageTrend')) {
+  new Chart(document.getElementById('ageTrend'), {
+    type: 'line',
+    data: {
+      labels: ageTrend.map(d => d.date),
+      datasets: [
+        { label: 'Critical', data: ageTrend.map(d => d.Critical), borderColor: '#da3633', tension: 0.3, pointRadius: 3, spanGaps: true },
+        { label: 'High',     data: ageTrend.map(d => d.High),     borderColor: '#d29922', tension: 0.3, pointRadius: 3, spanGaps: true },
+        { label: 'Medium',   data: ageTrend.map(d => d.Medium),   borderColor: '#1f6feb', tension: 0.3, pointRadius: 3, spanGaps: true },
+        { label: 'Low',      data: ageTrend.map(d => d.Low),      borderColor: '#238636', tension: 0.3, pointRadius: 3, spanGaps: true },
+      ]
+    },
+    options: {
+      responsive: true,
+      interaction: { mode: 'index' },
+      plugins: {
+        legend: { position: 'bottom', labels: { font: { size: 11 } } },
+        tooltip: { callbacks: { label: ctx => ctx.parsed.y != null ? `${ctx.dataset.label}: ${ctx.parsed.y}d avg` : null } }
+      },
+      scales: {
+        x: { grid: { color: '#30363d' } },
+        y: { grid: { color: '#30363d' }, beginAtZero: true,
+             title: { display: true, text: 'Avg age (days)', color: '#8b949e', font: { size: 11 } } }
+      }
+    }
+  });
+}
+
+// ── DataTable ────────────────────────────────────────────────────────────────
+$(document).ready(function() {
+  $('#slaTable').DataTable({
+    order: [[0, 'asc'], [6, 'desc']],
+    pageLength: 50,
+    columnDefs: [{ orderable: false, targets: -1 }],
+    language: { search: 'Search:' }
+  });
+});
+</script>
+{% endif %}
+{% endblock %}

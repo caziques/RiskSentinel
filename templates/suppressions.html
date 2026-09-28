@@ -1,0 +1,154 @@
+{% extends "base.html" %}
+{% block title %}Suppression Review{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-4">
+  <div>
+    <h4 class="fw-bold mb-0">Suppression Review</h4>
+    <small class="text-secondary">
+      False positive determinations requiring periodic re-review (NBL-IT-020 section 14)
+    </small>
+  </div>
+  {% if latest %}
+  <span class="badge bg-secondary">
+    {{ latest.report_date or latest.imported_at.strftime('%Y-%m-%d') }}
+  </span>
+  {% endif %}
+</div>
+
+<div class="row g-3 mb-4">
+  <div class="col-md-4">
+    <div class="card p-3">
+      <div class="text-secondary small mb-1">Suppressed Findings</div>
+      <div class="fs-3 fw-bold text-white">{{ rows|length }}</div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="card p-3" {% if overdue_count %}style="border-color:#a33;"{% endif %}>
+      <div class="text-secondary small mb-1">Review Overdue</div>
+      <div class="fs-3 fw-bold" style="color:{% if overdue_count %}#f78166{% else %}#3fb950{% endif %};">
+        {{ overdue_count }}
+      </div>
+      <div class="text-secondary" style="font-size:.7rem;">past the {{ review_days }} day mark</div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="card p-3">
+      <div class="text-secondary small mb-1">No Review Date</div>
+      <div class="fs-3 fw-bold" style="color:{% if undated_count %}#d29922{% else %}#3fb950{% endif %};">
+        {{ undated_count }}
+      </div>
+      <div class="text-secondary" style="font-size:.7rem;">suppressed before tracking, or via import</div>
+    </div>
+  </div>
+</div>
+
+{% if rules %}
+<div class="card mb-4">
+  <div class="p-3 border-bottom border-secondary d-flex justify-content-between align-items-center">
+    <div>
+      <h6 class="mb-0">Determinations</h6>
+      <small class="text-secondary">
+        Durable rules. Re-applied after every import so a false positive does not
+        lapse at the next scan.
+      </small>
+    </div>
+    <div>
+      <span class="badge bg-secondary">{{ rules_active }} active</span>
+      {% if rules_overdue %}<span class="badge bg-danger ms-1">{{ rules_overdue }} due for review</span>{% endif %}
+    </div>
+  </div>
+  <div class="table-responsive">
+    <table class="table table-sm table-hover mb-0">
+      <thead><tr>
+        <th>Scope</th><th>Applies to</th><th>Reason</th>
+        <th class="text-end">Matched</th><th>Review Due</th><th>By</th><th></th>
+      </tr></thead>
+      <tbody>
+        {% for r in rules %}
+        <tr {% if r.revoked %}style="opacity:.45;"{% endif %}>
+          <td><span class="badge bg-dark border border-secondary">{{ r.scope }}</span></td>
+          <td class="small text-white" style="max-width:300px;">
+            <div class="text-truncate" title="{{ r.label }}">{{ r.label }}</div>
+          </td>
+          <td class="small text-secondary" style="max-width:280px;">
+            <div class="text-truncate" title="{{ r.reason }}">{{ r.reason }}</div>
+          </td>
+          <td class="text-end small text-secondary">{{ '{:,}'.format(r.match_count or 0) }}</td>
+          <td class="small text-nowrap">
+            {% if r.revoked %}<span class="text-secondary">revoked</span>
+            {% elif r.is_overdue %}<span class="badge bg-danger">{{ r.review_due.strftime('%Y-%m-%d') }}</span>
+            {% elif r.review_due %}<span class="text-secondary">{{ r.review_due.strftime('%Y-%m-%d') }}</span>
+            {% else %}<span class="text-secondary">—</span>{% endif %}
+          </td>
+          <td class="small text-secondary">{{ r.created_by.username if r.created_by else '—' }}</td>
+          <td class="text-end">
+            {% if not r.revoked %}
+            <form method="post" action="{{ url_for('suppression_rule_revoke', rule_id=r.id) }}"
+                  onsubmit="return confirm('Revoke this determination and reinstate its findings?');">
+              <button class="btn btn-sm btn-outline-warning py-0">Revoke</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+{% if not rows %}
+<div class="card p-5 text-center">
+  <i class="bi bi-check-circle fs-1 text-success mb-3"></i>
+  <h6 class="text-white">No suppressed findings</h6>
+  <p class="text-secondary mb-0">Nothing is currently excluded as a false positive.</p>
+</div>
+{% else %}
+<div class="card">
+  <div class="table-responsive">
+    <table class="table table-hover table-sm mb-0">
+      <thead>
+        <tr>
+          <th>Review Due</th>
+          <th>Severity</th>
+          <th>Asset</th>
+          <th>Finding</th>
+          <th>Basis</th>
+          <th>Suppressed</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for v in rows %}
+        <tr>
+          <td class="text-nowrap small">
+            {% if not v.suppression_review_due %}
+              <span class="badge bg-warning text-dark">Not set</span>
+            {% elif v.suppression_review_due <= now %}
+              <span class="badge bg-danger">{{ v.suppression_review_due.strftime('%Y-%m-%d') }}</span>
+            {% else %}
+              <span class="text-secondary">{{ v.suppression_review_due.strftime('%Y-%m-%d') }}</span>
+            {% endif %}
+          </td>
+          <td><span class="badge sev-badge-{{ v.risk_factor }}">{{ v.risk_factor or '—' }}</span></td>
+          <td class="small">{{ v.asset or '' }}</td>
+          <td class="small">{{ v.plugin_name or v.plugin_id or v.vulnerability_id or '' }}</td>
+          <td class="small text-secondary" style="max-width:320px;">
+            {{ v.suppression_reason or 'No reason recorded' }}
+          </td>
+          <td class="small text-secondary text-nowrap">
+            {{ v.suppressed_at.strftime('%Y-%m-%d') if v.suppressed_at else '' }}
+          </td>
+          <td class="text-nowrap">
+            <a href="{{ url_for('vulnerability_detail', vuln_id=v.id) }}"
+               class="btn btn-outline-secondary btn-sm py-0">Review</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

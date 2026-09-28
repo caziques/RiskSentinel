@@ -1,0 +1,891 @@
+{% macro _cntUrl(mode) -%}
+{{ url_for('executive', import_id=latest.id, exclude_accepted='1' if exclude_accepted else '0', count_by=mode) }}
+{%- endmacro %}
+{% extends 'base.html' %}
+{% block title %}Executive Summary{% endblock %}
+
+{% block head %}
+<style>
+  /* ── Entrance animations ─────────────────────────────────────────── */
+  .reveal {
+    opacity: 0;
+    transform: translateY(18px);
+    transition: opacity .6s cubic-bezier(.2,.7,.3,1), transform .6s cubic-bezier(.2,.7,.3,1);
+  }
+  .reveal.in { opacity: 1; transform: none; }
+
+  /* ── KPI cards ───────────────────────────────────────────────────── */
+  .kpi-card {
+    position: relative;
+    overflow: hidden;
+    transition: transform .25s ease, box-shadow .25s ease, border-color .25s ease;
+    border: 1px solid #30363d;
+  }
+  .kpi-clickable:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 8px 24px rgba(0,0,0,.45), 0 0 0 1px #388bfd44;
+    border-color: #388bfd88 !important;
+  }
+  .kpi-card::after {           /* sheen sweep on hover */
+    content: '';
+    position: absolute; top: 0; left: -80%;
+    width: 50%; height: 100%;
+    background: linear-gradient(110deg, transparent, rgba(255,255,255,.06), transparent);
+    transform: skewX(-20deg);
+    transition: left .6s ease;
+    pointer-events: none;
+  }
+  .kpi-clickable:hover::after { left: 130%; }
+
+  .kpi-value { font-variant-numeric: tabular-nums; }
+
+  /* pulsing ring around the Critical card when criticals exist */
+  .kpi-pulse {
+    animation: cardPulse 2.4s ease-in-out infinite;
+  }
+  @keyframes cardPulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(218,54,51,.45); }
+    50%       { box-shadow: 0 0 0 7px rgba(218,54,51,0); }
+  }
+
+  .kpi-delta { font-size: .75rem; }
+  .kpi-delta .up   { color: #da3633; }
+  .kpi-delta .down { color: #238636; }
+  .kpi-delta .same { color: #8b949e; }
+
+  /* ── SVG grade ring ──────────────────────────────────────────────── */
+  .grade-wrap { position: relative; width: 140px; height: 140px; }
+  .grade-wrap svg { transform: rotate(-90deg); }
+  .grade-ring-bg   { fill: none; stroke: #21262d; stroke-width: 9; }
+  .grade-ring-fill {
+    fill: none; stroke-width: 9; stroke-linecap: round;
+    transition: stroke-dashoffset 1.6s cubic-bezier(.3,.8,.3,1);
+    filter: drop-shadow(0 0 6px currentColor);
+  }
+  .grade-letter {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    font-size: 3rem; font-weight: 800; line-height: 1;
+    opacity: 0; transform: scale(.5);
+    animation: gradePop .5s cubic-bezier(.2,1.6,.4,1) .9s forwards;
+  }
+  @keyframes gradePop { to { opacity: 1; transform: scale(1); } }
+  .grade-score { font-size: .7rem; font-weight: 500; color: #8b949e; margin-top: 2px; }
+
+  .score-bar-wrap { height: 8px; background: #21262d; border-radius: 4px; overflow: hidden; }
+  .score-bar-fill {
+    height: 100%; border-radius: 4px; width: 0;
+    transition: width 1.4s cubic-bezier(.3,.8,.3,1) .4s;
+    background-size: 200% 100%;
+    animation: barShimmer 2.5s linear 2s infinite;
+  }
+  @keyframes barShimmer {
+    0%   { filter: brightness(1); }
+    50%  { filter: brightness(1.35); }
+    100% { filter: brightness(1); }
+  }
+
+  /* ── Key findings ────────────────────────────────────────────────── */
+  .finding-bullet {
+    border-left: 3px solid #1f6feb;
+    padding: .4rem .75rem;
+    margin-bottom: .5rem;
+    font-size: .9rem;
+    background: #0d1117;
+    border-radius: 0 6px 6px 0;
+    opacity: 0; transform: translateX(-14px);
+    transition: opacity .45s ease, transform .45s ease, background .2s ease;
+  }
+  .finding-bullet.in { opacity: 1; transform: none; }
+  .finding-bullet:hover { background: #161b22; }
+  .finding-bullet.critical { border-color: #da3633; }
+  .finding-bullet.high     { border-color: #d29922; }
+  .finding-bullet.breached { border-color: #da3633; }
+
+  /* ── Priority vulns table ────────────────────────────────────────── */
+  .vuln-row { cursor: pointer; transition: background .15s ease; }
+  .vuln-row:hover { background: #21262d !important; }
+  .vuln-row td:first-child { position: relative; }
+  .sev-flame { display:inline-block; animation: flicker 1.8s ease-in-out infinite; }
+  @keyframes flicker {
+    0%, 100% { opacity: 1; }
+    45%      { opacity: .55; }
+    60%      { opacity: .9; }
+  }
+  .cvss-meter {
+    display:inline-block; width: 46px; height: 5px;
+    background:#21262d; border-radius:3px; overflow:hidden;
+    vertical-align: middle; margin-left:.4rem;
+  }
+  .cvss-meter > i {
+    display:block; height:100%; border-radius:3px; width:0;
+    transition: width 1s ease .3s;
+  }
+
+  /* ── SLA donut centre label ──────────────────────────────────────── */
+  .donut-holder { position: relative; }
+  .donut-center {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    pointer-events: none;
+  }
+  .donut-center .big { font-size: 1.7rem; font-weight: 800; font-variant-numeric: tabular-nums; }
+  .donut-center .lbl { font-size: .65rem; text-transform: uppercase; letter-spacing: .08em; color: #8b949e; }
+
+  .sla-gauge-label { font-size: .7rem; text-transform: uppercase; letter-spacing: .05em; }
+
+  /* ── live indicator dot in header ───────────────────────────────── */
+  .live-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: #238636; display:inline-block; margin-right:.35rem;
+    animation: dotPulse 2s ease-in-out infinite;
+  }
+  @keyframes dotPulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(35,134,54,.5); }
+    50%      { box-shadow: 0 0 0 5px rgba(35,134,54,0); }
+  }
+
+  .print-hide { }
+  @media print {
+    .print-hide { display: none !important; }
+    #sidebar, .topbar { display: none !important; }
+    #main-content { margin-left: 0 !important; }
+    body { background: #fff !important; color: #000 !important; }
+    .card { border: 1px solid #ccc !important; background: #fff !important; }
+    .reveal { opacity: 1 !important; transform: none !important; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+    .reveal, .finding-bullet { opacity: 1 !important; transform: none !important; }
+  }
+</style>
+{% endblock %}
+
+{% block topbar_left %}
+<span class="fw-semibold text-white">Executive Summary</span>
+{% endblock %}
+
+{% block content %}
+{% if no_data %}
+<div class="text-center py-5 text-secondary">
+  <i class="bi bi-inbox fs-1 d-block mb-3"></i>
+  No scan data available. <a href="{{ url_for('import_scan') }}">Import a CSV</a> to get started.
+</div>
+{% else %}
+
+{# ── Header row ──────────────────────────────────────────────────────────── #}
+<div class="d-flex align-items-start justify-content-between mb-4 flex-wrap gap-3 print-hide reveal">
+  <div>
+    <h4 class="mb-0 fw-bold">Executive Summary</h4>
+    <small class="text-secondary">
+      <span class="live-dot"></span>Scan: <strong>{{ latest.name or latest.imported_at.strftime('%Y-%m-%d') }}</strong>
+      {% if latest.report_date %} · Report date: {{ latest.report_date.isoformat() }}{% endif %}
+    </small>
+  </div>
+  <div class="d-flex align-items-center gap-3 flex-wrap">
+
+    {# ── Exclude Accepted toggle ── #}
+    <div class="d-flex align-items-center gap-2 border rounded px-3 py-1"
+         style="background:#161b22;border-color:#30363d!important;">
+      <div class="form-check form-switch mb-0">
+        <input class="form-check-input" type="checkbox" role="switch"
+               id="excludeAcceptedSwitch"
+               {% if exclude_accepted %}checked{% endif %}
+               onchange="applyExcludeToggle(this.checked)">
+        <label class="form-check-label text-secondary small" for="excludeAcceptedSwitch">
+          Exclude Accepted
+        </label>
+      </div>
+      {% if accepted_count %}
+      <span class="badge bg-secondary" title="{{ '{:,}'.format(accepted_count) }} active risk acceptance(s)">
+        {{ '{:,}'.format(accepted_count) }}
+      </span>
+      {% endif %}
+      {% if exclude_accepted and excluded_count %}
+      <span class="badge text-bg-warning" title="{{ '{:,}'.format(excluded_count) }} findings hidden">
+        −{{ '{:,}'.format(excluded_count) }} hidden
+      </span>
+      {% endif %}
+    </div>
+
+    {# ── Count by: findings vs distinct CVEs ── #}
+    <div class="d-flex align-items-center gap-2 border rounded px-3 py-1"
+         style="background:#161b22;border-color:#30363d!important;">
+      <span class="text-secondary small">Count</span>
+      <div class="btn-group btn-group-sm" role="group">
+        <a class="btn btn-sm {{ 'btn-primary' if count_by == 'findings' else 'btn-outline-secondary' }}"
+           href="{{ _cntUrl('findings') }}" title="One per affected host and package. The remediation workload.">
+          Findings
+        </a>
+        <a class="btn btn-sm {{ 'btn-primary' if count_by == 'cves' else 'btn-outline-secondary' }}"
+           href="{{ _cntUrl('cves') }}" title="One per CVE, rated by its worst instance. Matches the scanner console.">
+          CVEs
+        </a>
+      </div>
+      <span class="text-secondary" style="font-size:.7rem;">
+        {{ '{:,}'.format(total_findings) }} findings / {{ '{:,}'.format(total_cves) }} CVEs
+      </span>
+    </div>
+
+    {# ── Import selector ── #}
+    <select class="form-select form-select-sm" style="width:auto;" id="importSelector">
+      {% for imp in all_imports %}
+      <option value="{{ imp.id }}" {% if imp.id == latest.id %}selected{% endif %}>
+        {{ imp.name or imp.imported_at.strftime('%Y-%m-%d') }}
+      </option>
+      {% endfor %}
+    </select>
+
+    <button class="btn btn-sm btn-outline-secondary" onclick="window.print()">
+      <i class="bi bi-printer"></i> Print
+    </button>
+  </div>
+</div>
+
+{# ── Risk Grade + Headline KPIs ──────────────────────────────────────────── #}
+<div class="row g-3 mb-4">
+
+  {# Grade card — animated SVG ring #}
+  <div class="col-12 col-md-3 col-xl-2 reveal">
+    <div class="card h-100 d-flex flex-column align-items-center justify-content-center p-3 text-center">
+      <div class="text-secondary mb-2" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.07em;">Risk Grade</div>
+      <div class="grade-wrap">
+        <svg width="140" height="140" viewBox="0 0 140 140">
+          <circle class="grade-ring-bg"   cx="70" cy="70" r="60"></circle>
+          <circle class="grade-ring-fill" cx="70" cy="70" r="60"
+                  id="gradeRing" stroke="{{ grade_color }}"
+                  stroke-dasharray="377" stroke-dashoffset="377"
+                  data-score="{{ score }}"></circle>
+        </svg>
+        <div class="grade-letter" style="color:{{ grade_color }};">
+          {{ grade }}
+          <span class="grade-score"><span class="count-up" data-target="{{ score }}">0</span>/100</span>
+        </div>
+      </div>
+      <div class="score-bar-wrap w-100 mt-3">
+        <div class="score-bar-fill" id="scoreBar" data-width="{{ score }}" style="background:{{ grade_color }};"></div>
+      </div>
+    </div>
+  </div>
+
+  {# KPI cards #}
+  <div class="col-12 col-md-9 col-xl-10">
+    <div class="row g-3 h-100">
+
+      <div class="col-6 col-lg-3 reveal" style="transition-delay:.05s;">
+        <a href="{{ url_for('vulnerabilities', import_id=latest.id) }}" class="text-decoration-none">
+          <div class="card kpi-card kpi-clickable h-100 p-3">
+            <div class="text-secondary" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.07em;">Total Active</div>
+            <div class="display-5 mt-1 kpi-value count-up" data-target="{{ total_active }}">0</div>
+            {% if delta %}
+            <div class="kpi-delta mt-1">
+              {% if delta.new > 0 %}<span class="up">▲ {{ '{:,}'.format(delta.new) }} new</span>{% endif %}
+              {% if delta.resolved > 0 %}<span class="down ms-2">▼ {{ delta.resolved }} resolved</span>{% endif %}
+            </div>
+            {% endif %}
+          </div>
+        </a>
+      </div>
+
+      <div class="col-6 col-lg-3 reveal" style="transition-delay:.1s;">
+        <a href="{{ url_for('vulnerabilities', import_id=latest.id, severity='Critical') }}" class="text-decoration-none">
+          <div class="card kpi-card kpi-clickable h-100 p-3 {% if sev.Critical > 0 %}kpi-pulse{% endif %}" style="border-color:#da3633;">
+            <div class="text-secondary" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.07em;">
+              {% if sev.Critical > 0 %}<span class="sev-flame">🔥</span>{% endif %} Critical
+            </div>
+            <div class="display-5 mt-1 text-danger kpi-value count-up" data-target="{{ sev.Critical }}">0</div>
+            {% if prev_sev %}
+            <div class="kpi-delta mt-1">
+              {% set diff = sev.Critical - prev_sev.Critical %}
+              {% if diff > 0 %}<span class="up">▲ {{ diff }} vs prev</span>
+              {% elif diff < 0 %}<span class="down">▼ {{ diff|abs }} vs prev</span>
+              {% else %}<span class="same">— no change</span>{% endif %}
+            </div>
+            {% endif %}
+          </div>
+        </a>
+      </div>
+
+      <div class="col-6 col-lg-3 reveal" style="transition-delay:.15s;">
+        <a href="{{ url_for('vulnerabilities', import_id=latest.id, severity='High') }}" class="text-decoration-none">
+          <div class="card kpi-card kpi-clickable h-100 p-3" style="border-color:#d29922;">
+            <div class="text-secondary" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.07em;">High</div>
+            <div class="display-5 mt-1 kpi-value count-up" data-target="{{ sev.High }}" style="color:#d29922;">0</div>
+            {% if prev_sev %}
+            <div class="kpi-delta mt-1">
+              {% set diff = sev.High - prev_sev.High %}
+              {% if diff > 0 %}<span class="up">▲ {{ diff }} vs prev</span>
+              {% elif diff < 0 %}<span class="down">▼ {{ diff|abs }} vs prev</span>
+              {% else %}<span class="same">— no change</span>{% endif %}
+            </div>
+            {% endif %}
+          </div>
+        </a>
+      </div>
+
+      <div class="col-6 col-lg-3 reveal" style="transition-delay:.2s;">
+        <a href="{{ url_for('assets') }}" class="text-decoration-none">
+          <div class="card kpi-card kpi-clickable h-100 p-3">
+            <div class="text-secondary" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.07em;">Assets Scanned</div>
+            <div class="display-5 mt-1 kpi-value count-up" data-target="{{ asset_count }}">0</div>
+            <div class="kpi-delta mt-1 text-secondary">
+              <span style="color:#da3633;">{{ '{:,}'.format(assets_at_risk) }}</span> with Critical/High ·
+              <span style="color:#d29922;">{{ '{:,}'.format(assets_breached) }}</span> SLA breached
+            </div>
+          </div>
+        </a>
+      </div>
+
+      <div class="col-6 col-lg-3 reveal" style="transition-delay:.25s;">
+        <a href="{{ url_for('sla_tracking') }}" class="text-decoration-none">
+          <div class="card kpi-card kpi-clickable h-100 p-3" {% if breach_pct > 20 %}style="border-color:#da3633;"{% endif %}>
+            <div class="text-secondary" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.07em;">SLA Compliance</div>
+            <div class="display-5 mt-1 kpi-value {% if compliance_pct >= 80 %}text-success{% elif compliance_pct >= 60 %}text-warning{% else %}text-danger{% endif %}">
+              <span class="count-up" data-target="{{ compliance_pct }}">0</span>%
+            </div>
+            <div class="kpi-delta mt-1 text-secondary">
+              <span style="color:#da3633;">{{ sla_counts.Breached }}</span> breached ·
+              <span style="color:#d29922;">{{ sla_counts['At Risk'] }}</span> at risk
+            </div>
+          </div>
+        </a>
+      </div>
+
+      <div class="col-6 col-lg-3 reveal" style="transition-delay:.3s;">
+        <a href="{{ url_for('cve_list') }}" class="text-decoration-none">
+          <div class="card kpi-card kpi-clickable h-100 p-3">
+            <div class="text-secondary" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.07em;">Avg CVSS</div>
+            <div class="display-5 mt-1 kpi-value count-up {% if avg_cvss >= 7 %}text-danger{% elif avg_cvss >= 4 %}text-warning{% else %}text-success{% endif %}"
+                 data-target="{{ avg_cvss }}" data-decimals="1">0</div>
+            <div class="kpi-delta mt-1 text-secondary">v3 base score average</div>
+          </div>
+        </a>
+      </div>
+
+      <div class="col-6 col-lg-3 reveal" style="transition-delay:.35s;">
+        <a href="{{ url_for('vulnerabilities', import_id=latest.id, severity='Medium') }}" class="text-decoration-none">
+          <div class="card kpi-card kpi-clickable h-100 p-3">
+            <div class="text-secondary" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.07em;">Medium</div>
+            <div class="display-5 mt-1 kpi-value count-up" data-target="{{ sev.Medium }}" style="color:#1f6feb;">0</div>
+            {% if prev_sev %}
+            <div class="kpi-delta mt-1">
+              {% set diff = sev.Medium - prev_sev.Medium %}
+              {% if diff > 0 %}<span class="up">▲ {{ diff }} vs prev</span>
+              {% elif diff < 0 %}<span class="down">▼ {{ diff|abs }} vs prev</span>
+              {% else %}<span class="same">— no change</span>{% endif %}
+            </div>
+            {% endif %}
+          </div>
+        </a>
+      </div>
+
+      <div class="col-6 col-lg-3 reveal" style="transition-delay:.4s;">
+        <a href="{{ url_for('vulnerabilities', import_id=latest.id, severity='Low') }}" class="text-decoration-none">
+          <div class="card kpi-card kpi-clickable h-100 p-3">
+            <div class="text-secondary" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.07em;">Low</div>
+            <div class="display-5 mt-1 text-success kpi-value count-up" data-target="{{ sev.Low }}">0</div>
+            {% if prev_sev %}
+            <div class="kpi-delta mt-1">
+              {% set diff = sev.Low - prev_sev.Low %}
+              {% if diff > 0 %}<span class="up">▲ {{ diff }} vs prev</span>
+              {% elif diff < 0 %}<span class="down">▼ {{ diff|abs }} vs prev</span>
+              {% else %}<span class="same">— no change</span>{% endif %}
+            </div>
+            {% endif %}
+          </div>
+        </a>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+{# ── Charts row: Trend + SLA donut ───────────────────────────────────────── #}
+<div class="row g-3 mb-4">
+  <div class="col-12 col-xl-8 reveal">
+    <div class="card p-3 h-100">
+      <div class="d-flex justify-content-between align-items-center mb-2">
+        <h6 class="mb-0">Risk Trend</h6>
+        <small class="text-secondary">Click a data point to view that scan</small>
+      </div>
+      <canvas id="trendChart" height="90"></canvas>
+    </div>
+  </div>
+  <div class="col-12 col-xl-4 reveal" style="transition-delay:.1s;">
+    <div class="card p-3 h-100 d-flex flex-column">
+      <h6 class="mb-3">SLA Status</h6>
+      <div class="flex-grow-1 d-flex align-items-center justify-content-center donut-holder">
+        <canvas id="slaDonut" style="max-height:200px;"></canvas>
+        <div class="donut-center">
+          <span class="big {% if compliance_pct >= 80 %}text-success{% elif compliance_pct >= 60 %}text-warning{% else %}text-danger{% endif %}">
+            <span class="count-up" data-target="{{ compliance_pct }}">0</span>%
+          </span>
+          <span class="lbl">compliant</span>
+        </div>
+      </div>
+      <div class="row text-center mt-3">
+        <div class="col-4">
+          <div class="sla-gauge-label text-danger">Breached</div>
+          <div class="fw-bold count-up" data-target="{{ sla_counts.Breached }}">0</div>
+        </div>
+        <div class="col-4">
+          <div class="sla-gauge-label text-warning">At Risk</div>
+          <div class="fw-bold count-up" data-target="{{ sla_counts['At Risk'] }}">0</div>
+        </div>
+        <div class="col-4">
+          <div class="sla-gauge-label text-success">On Track</div>
+          <div class="fw-bold count-up" data-target="{{ sla_counts['On Track'] }}">0</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+{# ── Top Assets + Key Findings ───────────────────────────────────────────── #}
+<div class="row g-3 mb-4">
+  <div class="col-12 col-xl-7 reveal">
+    <div class="card p-3 h-100">
+      <div class="d-flex justify-content-between align-items-center mb-2">
+        <h6 class="mb-0">Top Exposed Assets</h6>
+        <a href="{{ url_for('assets') }}" class="btn btn-sm btn-outline-secondary print-hide">View all</a>
+      </div>
+      <canvas id="assetsChart" height="160"></canvas>
+    </div>
+  </div>
+  <div class="col-12 col-xl-5 reveal" style="transition-delay:.1s;">
+    <div class="card p-3 h-100">
+      <h6 class="mb-3">Key Findings</h6>
+      <div id="findingsList">
+        {% for bullet in findings_bullets %}
+        <div class="finding-bullet
+          {% if 'critical' in bullet.lower() %}critical
+          {% elif 'high' in bullet.lower() %}high
+          {% elif 'breach' in bullet.lower() %}breached
+          {% endif %}">
+          {{ bullet }}
+        </div>
+        {% endfor %}
+      </div>
+      {% if not findings_bullets %}
+      <p class="text-secondary mb-0">No significant findings to highlight.</p>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+{# ── Priority Vulnerability Table ────────────────────────────────────────── #}
+<div class="card p-3 mb-4 reveal">
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h6 class="mb-0">Priority Vulnerabilities <span class="badge bg-secondary ms-1">Critical &amp; High</span></h6>
+    <a href="{{ url_for('remediation') }}" class="btn btn-sm btn-outline-secondary print-hide">Remediation plan</a>
+  </div>
+  <div class="table-responsive">
+    <table class="table table-sm align-middle mb-0" id="vulnTable">
+      <thead>
+        <tr>
+          <th>Severity</th>
+          <th>Vulnerability</th>
+          <th>CVSS</th>
+          <th class="text-end">Assets</th>
+          <th class="text-end">Findings</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for v in top_vulns %}
+        {% set display_name = v.plugin_name or v.vulnerability_id %}
+        {# Go to the vulnerability detail page, matching the Vulnerabilities list.
+           Falls back to a search only when the aggregate has no representative row. #}
+        {% if v.example_id %}
+          {% set row_url = url_for('vulnerability_detail', vuln_id=v.example_id) %}
+        {% elif v.plugin_name %}
+          {% set row_url = url_for('plugins') ~ '?q=' ~ v.plugin_name|urlencode %}
+        {% else %}
+          {% set row_url = url_for('vulnerabilities') ~ '?search=' ~ v.vulnerability_id|urlencode %}
+        {% endif %}
+        {% set row_target = '_self' %}
+        <tr class="vuln-row" onclick="window.open('{{ row_url }}', '{{ row_target }}')" style="cursor:pointer;">
+          <td>
+            <span class="badge sev-badge-{{ v.risk_factor }}">{{ v.risk_factor }}</span>
+          </td>
+          <td class="text-truncate" style="max-width:320px;" title="{{ display_name }}">{{ display_name }}</td>
+          <td>
+            {% if v.cvss_v3_score %}
+            <span class="{% if v.cvss_v3_score >= 7 %}text-danger{% elif v.cvss_v3_score >= 4 %}text-warning{% else %}text-success{% endif %}">
+              {{ '%.1f'|format(v.cvss_v3_score) }}
+            </span><span class="cvss-meter"><i data-score="{{ v.cvss_v3_score }}"
+              class="{% if v.cvss_v3_score >= 7 %}bg-danger{% elif v.cvss_v3_score >= 4 %}bg-warning{% else %}bg-success{% endif %}"></i></span>
+            {% else %}—{% endif %}
+          </td>
+          <td class="text-end">
+            <span class="badge bg-secondary asset-count-btn"
+                  style="cursor:pointer;font-size:.85rem;"
+                  data-plugin="{{ v.plugin_name }}"
+                  data-vulnid="{{ v.vulnerability_id }}"
+                  data-label="{{ display_name }}"
+                  onclick="event.stopPropagation(); showAssets(this)">
+              {{ v.assets }}
+            </span>
+          </td>
+          <td class="text-end">{{ '{:,}'.format(v.cnt) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{# ── Severity breakdown mini table ───────────────────────────────────────── #}
+<div class="row g-3 mb-4">
+  <div class="col-12 col-md-6 col-xl-4 reveal">
+    <div class="card p-3">
+      <h6 class="mb-3">Severity Breakdown</h6>
+      <table class="table table-sm mb-0">
+        <thead><tr><th>Severity</th><th class="text-end">Count</th><th class="text-end">SLA (days)</th></tr></thead>
+        <tbody>
+          {% for sev_name, sla_d in [('Critical',7),('High',30),('Medium',90),('Low',180)] %}
+          <tr>
+            <td><span class="badge sev-badge-{{ sev_name }}">{{ sev_name }}</span></td>
+            <td class="text-end fw-semibold">
+              <a href="{{ url_for('vulnerabilities', import_id=latest.id, severity=sev_name) }}"
+                 class="text-white text-decoration-none count-up" data-target="{{ sev[sev_name] }}">0</a>
+            </td>
+            <td class="text-end text-secondary">{{ sla_d }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="col-12 col-md-6 col-xl-8 reveal" style="transition-delay:.1s;">
+    <div class="card p-3">
+      <h6 class="mb-3">Severity Distribution</h6>
+      <div style="max-width:260px; margin:0 auto;">
+        <canvas id="sevDonut"></canvas>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% endif %}
+
+<!-- Affected Assets Modal -->
+<div class="modal fade" id="assetsModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content" style="background:#161b22;border:1px solid #30363d;">
+      <div class="modal-header border-secondary py-2">
+        <h6 class="modal-title fw-bold" id="assetsModalTitle">Affected Assets</h6>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body p-0">
+        <div id="assetsModalBody" class="p-3 text-secondary small">Loading…</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+{% if not no_data %}
+<script>
+const trendData    = {{ trend_data_json | safe }};
+const assetsData   = {{ assets_chart_json | safe }};
+const slaBreached  = {{ sla_counts.Breached }};
+const slaAtRisk    = {{ sla_counts['At Risk'] }};
+const slaOnTrack   = {{ sla_counts['On Track'] }};
+const sevData      = {
+  Critical: {{ sev.Critical }},
+  High:     {{ sev.High }},
+  Medium:   {{ sev.Medium }},
+  Low:      {{ sev.Low }},
+};
+
+const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+/* ── Scroll-reveal: stagger cards into view ──────────────────────── */
+const revealObs = new IntersectionObserver(entries => {
+  entries.forEach(e => {
+    if (e.isIntersecting) { e.target.classList.add('in'); revealObs.unobserve(e.target); }
+  });
+}, { threshold: 0.08 });
+document.querySelectorAll('.reveal').forEach(el => revealObs.observe(el));
+
+/* Chart axis labels: group thousands as well. */
+if (window.Chart) {
+  Chart.defaults.plugins.tooltip.callbacks = Chart.defaults.plugins.tooltip.callbacks || {};
+  const _grp = v => (typeof v === 'number') ? v.toLocaleString('en-GB') : v;
+  ['linear', 'category'].forEach(sc => {
+    Chart.defaults.scales[sc] = Chart.defaults.scales[sc] || {};
+    Chart.defaults.scales[sc].ticks = Object.assign({}, Chart.defaults.scales[sc].ticks, {
+      callback: function (value) {
+        const lbl = this.getLabelForValue ? this.getLabelForValue(value) : value;
+        return _grp(typeof lbl === 'number' ? lbl : value);
+      }
+    });
+  });
+}
+
+/* ── Count-up numbers ────────────────────────────────────────────── */
+const easeOut = t => 1 - Math.pow(1 - t, 3);
+/* Group thousands so six-figure counts stay readable. */
+const fmtNum = (v, d) => v.toLocaleString('en-GB', {
+  minimumFractionDigits: d, maximumFractionDigits: d
+});
+function countUp(el) {
+  const target   = parseFloat(el.dataset.target) || 0;
+  const decimals = parseInt(el.dataset.decimals || '0');
+  if (reducedMotion) { el.textContent = fmtNum(target, decimals); return; }
+  const dur = 1300;
+  const t0  = performance.now();
+  function tick(now) {
+    const p = Math.min((now - t0) / dur, 1);
+    el.textContent = fmtNum(target * easeOut(p), decimals);
+    if (p < 1) requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+}
+const countObs = new IntersectionObserver(entries => {
+  entries.forEach(e => {
+    if (e.isIntersecting) { countUp(e.target); countObs.unobserve(e.target); }
+  });
+}, { threshold: 0.4 });
+document.querySelectorAll('.count-up').forEach(el => countObs.observe(el));
+
+/* ── Grade ring + score bar ──────────────────────────────────────── */
+requestAnimationFrame(() => requestAnimationFrame(() => {
+  const ring = document.getElementById('gradeRing');
+  if (ring) {
+    const score = parseFloat(ring.dataset.score) || 0;
+    const C = 2 * Math.PI * 60;       // r=60
+    ring.style.strokeDashoffset = C * (1 - score / 100);
+  }
+  const bar = document.getElementById('scoreBar');
+  if (bar) bar.style.width = bar.dataset.width + '%';
+  // CVSS mini meters in the priority table
+  document.querySelectorAll('.cvss-meter > i').forEach(i => {
+    i.style.width = (parseFloat(i.dataset.score) / 10 * 100) + '%';
+  });
+}));
+
+/* ── Key findings: staggered slide-in ───────────────────────────── */
+const bullets = document.querySelectorAll('.finding-bullet');
+const bulletObs = new IntersectionObserver(entries => {
+  entries.forEach(e => {
+    if (!e.isIntersecting) return;
+    bulletObs.unobserve(e.target);
+    const idx = [...bullets].indexOf(e.target);
+    setTimeout(() => e.target.classList.add('in'), 120 * idx);
+  });
+}, { threshold: 0.2 });
+bullets.forEach(b => bulletObs.observe(b));
+
+/* ── Chart.js global animation style ─────────────────────────────── */
+const chartAnim = reducedMotion ? false : {
+  duration: 1200,
+  easing: 'easeOutQuart',
+};
+
+/* ── Trend chart (gradient fills, animated draw) ─────────────────── */
+const trendCtx = document.getElementById('trendChart');
+if (trendCtx && trendData.length) {
+  const labels = trendData.map(d => d.date);
+  const ctx2d  = trendCtx.getContext('2d');
+  const mkGrad = hex => {
+    const g = ctx2d.createLinearGradient(0, 0, 0, 260);
+    g.addColorStop(0, hex + '55');
+    g.addColorStop(1, hex + '00');
+    return g;
+  };
+  const mkDs = (sev, color, fill) => ({
+    label: sev,
+    data: trendData.map(d => d[sev]),
+    borderColor: color,
+    backgroundColor: fill ? mkGrad(color) : color + '22',
+    tension: 0.35, fill,
+    pointRadius: 4, pointHoverRadius: 7,
+    pointBackgroundColor: color,
+    borderWidth: 2.5,
+  });
+  new Chart(trendCtx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        mkDs('Critical', '#da3633', true),
+        mkDs('High',     '#d29922', true),
+        mkDs('Medium',   '#1f6feb', false),
+        mkDs('Low',      '#238636', false),
+      ]
+    },
+    options: {
+      responsive: true, interaction: { mode: 'index', intersect: false },
+      animation: reducedMotion ? false : {
+        duration: 1400, easing: 'easeOutQuart',
+        delay: c => c.type === 'data' ? c.dataIndex * 60 + c.datasetIndex * 150 : 0,
+      },
+      plugins: { legend: { labels: { boxWidth: 12 } } },
+      scales: { y: { beginAtZero: true, grid: { color: '#21262d' } },
+                x: { grid: { color: '#21262d' } } },
+      onClick(evt, elems) {
+        if (elems.length) {
+          const d = trendData[elems[0].index];
+          if (d.import_id) window.location = '/vulnerabilities?import_id=' + d.import_id;
+        }
+      }
+    }
+  });
+}
+
+/* ── SLA donut (spins in) ────────────────────────────────────────── */
+const slaCtx = document.getElementById('slaDonut');
+if (slaCtx) {
+  new Chart(slaCtx, {
+    type: 'doughnut',
+    data: {
+      labels: ['Breached', 'At Risk', 'On Track'],
+      datasets: [{
+        data: [slaBreached, slaAtRisk, slaOnTrack],
+        backgroundColor: ['#da3633', '#d29922', '#238636'],
+        borderWidth: 0, hoverOffset: 8,
+      }]
+    },
+    options: {
+      cutout: '72%',
+      animation: reducedMotion ? false : { animateRotate: true, animateScale: true, duration: 1300, easing: 'easeOutQuart' },
+      plugins: { legend: { position: 'bottom', labels: { boxWidth: 10 } } },
+      onClick(evt, elems) {
+        if (elems.length) {
+          const labels = ['breached','at_risk','on_track'];
+          window.location = '/sla?status=' + labels[elems[0].index];
+        }
+      }
+    }
+  });
+}
+
+/* ── Assets horizontal bar (staggered grow) ──────────────────────── */
+const assetsCtx = document.getElementById('assetsChart');
+if (assetsCtx && assetsData.length) {
+  const labels = assetsData.map(d => d.asset);
+  new Chart(assetsCtx, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        { label: 'Critical', data: assetsData.map(d=>d.critical), backgroundColor: '#da3633', borderRadius: 3 },
+        { label: 'High',     data: assetsData.map(d=>d.high),     backgroundColor: '#d29922', borderRadius: 3 },
+        { label: 'Medium',   data: assetsData.map(d=>d.medium),   backgroundColor: '#1f6feb', borderRadius: 3 },
+      ]
+    },
+    options: {
+      indexAxis: 'y',
+      responsive: true,
+      animation: reducedMotion ? false : {
+        duration: 900, easing: 'easeOutQuart',
+        delay: c => c.type === 'data' ? c.dataIndex * 90 : 0,
+      },
+      plugins: { legend: { labels: { boxWidth: 10 } } },
+      scales: {
+        x: { stacked: true, beginAtZero: true, grid: { color: '#21262d' } },
+        y: { stacked: true, grid: { color: '#21262d' }, ticks: { font: { size: 11 } } }
+      },
+      onClick(evt, elems) {
+        if (elems.length) {
+          const asset = assetsData[elems[0].index].asset;
+          window.location = '/assets/' + encodeURIComponent(asset);
+        }
+      }
+    }
+  });
+}
+
+/* ── Severity donut ──────────────────────────────────────────────── */
+const sevCtx = document.getElementById('sevDonut');
+if (sevCtx) {
+  new Chart(sevCtx, {
+    type: 'doughnut',
+    data: {
+      labels: ['Critical', 'High', 'Medium', 'Low'],
+      datasets: [{
+        data: [sevData.Critical, sevData.High, sevData.Medium, sevData.Low],
+        backgroundColor: ['#da3633', '#d29922', '#1f6feb', '#238636'],
+        borderWidth: 0, hoverOffset: 8,
+      }]
+    },
+    options: {
+      cutout: '65%',
+      maintainAspectRatio: true,
+      aspectRatio: 1,
+      animation: reducedMotion ? false : { animateRotate: true, animateScale: true, duration: 1300, easing: 'easeOutQuart' },
+      plugins: { legend: { position: 'bottom', labels: { boxWidth: 10 } } },
+      onClick(evt, elems) {
+        if (elems.length) {
+          const sevs = ['Critical','High','Medium','Low'];
+          window.location = '/vulnerabilities?risk_factor=' + sevs[elems[0].index];
+        }
+      }
+    }
+  });
+}
+
+/* ── Navigation helpers (preserve both import_id + exclude_accepted) ── */
+function _navUrl(importId, excludeAccepted) {
+  const p = new URLSearchParams();
+  p.set('import_id', importId);
+  // Always explicit: the server defaults this ON, so omitting it when the switch
+  // is off would silently turn it back on and make the toggle one-way.
+  p.set('exclude_accepted', excludeAccepted ? '1' : '0');
+  p.set('count_by', '{{ count_by }}');
+  return '{{ url_for("executive") }}?' + p.toString();
+}
+
+document.getElementById('importSelector').addEventListener('change', function() {
+  const excl = document.getElementById('excludeAcceptedSwitch').checked;
+  location.href = _navUrl(this.value, excl);
+});
+
+function applyExcludeToggle(checked) {
+  const importId = document.getElementById('importSelector').value;
+  location.href = _navUrl(importId, checked);
+}
+
+/* ── Affected assets modal ───────────────────────────────────────── */
+function showAssets(btn) {
+  const plugin = btn.dataset.plugin;
+  const vulnId = btn.dataset.vulnid;
+  const label  = btn.dataset.label;
+  document.getElementById('assetsModalTitle').textContent = 'Affected Assets — ' + label;
+  document.getElementById('assetsModalBody').innerHTML = '<div class="text-secondary">Loading…</div>';
+  const modal = new bootstrap.Modal(document.getElementById('assetsModal'));
+  modal.show();
+
+  const params = new URLSearchParams();
+  if (plugin) params.set('plugin_name', plugin);
+  else         params.set('vulnerability_id', vulnId);
+
+  fetch('/api/vuln-assets?' + params)
+    .then(r => r.json())
+    .then(data => {
+      if (!data.length) {
+        document.getElementById('assetsModalBody').innerHTML = '<div class="text-secondary p-3">No assets found.</div>';
+        return;
+      }
+      let html = '<table class="table table-sm table-hover mb-0"><thead><tr>'
+               + '<th>Asset</th><th>IP</th><th>Port</th><th>First Seen</th><th>Last Seen</th>'
+               + '</tr></thead><tbody>';
+      data.forEach(r => {
+        html += `<tr>
+          <td><a href="/assets/${encodeURIComponent(r.asset)}" class="text-white fw-semibold text-decoration-none">${r.asset}</a></td>
+          <td class="text-secondary">${r.ip}</td>
+          <td class="text-secondary">${r.port || '—'}</td>
+          <td class="text-secondary">${r.first_seen || '—'}</td>
+          <td class="text-secondary">${r.last_seen  || '—'}</td>
+        </tr>`;
+      });
+      html += '</tbody></table>';
+      document.getElementById('assetsModalBody').innerHTML = html;
+    });
+}
+</script>
+{% endif %}
+{% endblock %}

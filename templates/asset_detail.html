@@ -1,0 +1,184 @@
+{% extends "base.html" %}
+{% block title %}{{ asset_name }}{% endblock %}
+
+{% block content %}
+<div class="mb-3">
+  <a href="{{ url_for('assets') }}?import_id={{ current_import_id }}" class="text-secondary text-decoration-none small">
+    <i class="bi bi-arrow-left"></i> Back to Assets
+  </a>
+</div>
+
+<div class="d-flex align-items-center justify-content-between mb-4">
+  <div>
+    <h4 class="fw-bold mb-1"><i class="bi bi-hdd-network me-2 text-secondary"></i>{{ asset_name }}</h4>
+    <div class="text-secondary small">{{ vulns[0].ip_address if vulns else '' }} · {{ vulns|length }} vulnerabilities</div>
+    {% if asset_groups %}
+    <div class="mt-1">
+      {% for g in asset_groups %}
+        <a href="{{ url_for('asset_group_detail', group_id=g.id) }}"
+           class="badge text-decoration-none me-1"
+           style="background:{{ g.color }}22;border:1px solid {{ g.color }}66;color:{{ g.color }};">
+          <i class="bi bi-collection me-1" style="font-size:.65rem;"></i>{{ g.name }}
+        </a>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+  <div class="d-flex gap-2 align-items-center">
+    <a href="{{ url_for('risk_acceptance', add='1', asset=asset_name) }}"
+       class="btn btn-outline-success btn-sm">
+      <i class="bi bi-shield-plus me-1"></i>Accept Whole Asset
+    </a>
+    <select class="form-select form-select-sm" style="width:auto;"
+            onchange="window.location='{{ url_for('asset_detail', asset_name=asset_name) }}?import_id='+this.value">
+      {% for imp in all_imports %}
+      <option value="{{ imp.id }}" {% if current_import_id == imp.id %}selected{% endif %}>
+        {{ imp.report_date or imp.imported_at.strftime('%Y-%m-%d') }}
+      </option>
+      {% endfor %}
+    </select>
+  </div>
+</div>
+
+<!-- KPI row -->
+<div class="row g-3 mb-4">
+  {% for label, val, color in [('Critical', sev.Critical, '#da3633'), ('High', sev.High, '#d29922'), ('Medium', sev.Medium, '#1f6feb'), ('Low', sev.Low, '#238636'), ('Info', sev.None, '#6e7681')] %}
+  <div class="col-6 col-md-4 col-lg-2">
+    <div class="card p-3 text-center h-100" style="border-color:{{ color }};">
+      <div class="small text-secondary mb-1">{{ label }}</div>
+      <div class="display-6 fw-bold" style="color:{{ color }};">{{ val }}</div>
+    </div>
+  </div>
+  {% endfor %}
+  <div class="col-6 col-md-4 col-lg-2">
+    <div class="card p-3 text-center h-100">
+      <div class="small text-secondary mb-1">Total</div>
+      <div class="display-6 fw-bold text-white">{{ vulns|length }}</div>
+    </div>
+  </div>
+</div>
+
+<div class="row g-4 mb-4">
+  <!-- History chart -->
+  <div class="col-md-7">
+    <div class="card p-3 h-100">
+      <h6 class="text-secondary mb-3">Vulnerability Trend</h6>
+      <canvas id="histChart" height="200"></canvas>
+    </div>
+  </div>
+  <!-- Plugin families -->
+  <div class="col-md-5">
+    <div class="card p-3 h-100">
+      <h6 class="text-secondary mb-3">Plugin Families</h6>
+      <canvas id="familyChart" height="200"></canvas>
+    </div>
+  </div>
+</div>
+
+<!-- Vulnerability table -->
+<div class="card">
+  <div class="p-3 border-bottom border-secondary d-flex align-items-center justify-content-between">
+    <h6 class="mb-0 text-secondary">All Vulnerabilities</h6>
+    <div class="d-flex gap-2">
+      {% for s in ['Critical','High','Medium','Low'] %}
+      <a href="{{ url_for('vulnerabilities') }}?import_id={{ current_import_id }}&asset={{ asset_name }}&severity={{ s }}"
+         class="btn btn-sm btn-outline-secondary">{{ s }} ({{ sev[s] }})</a>
+      {% endfor %}
+    </div>
+  </div>
+  <div class="table-responsive">
+    <table id="vulnTable" class="table table-hover table-sm mb-0" style="width:100%">
+      <thead>
+        <tr>
+          <th>Severity</th>
+          <th>Plugin Name</th>
+          <th>Family</th>
+          <th>Port</th>
+          <th>CVSS V3</th>
+          <th>First Seen</th>
+          <th>Last Seen</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for v in vulns %}
+      <tr>
+        <td><span class="badge sev-badge-{{ v.risk_factor }}">{{ v.risk_factor }}</span></td>
+        {% set display_name = v.plugin_name or v.plugin_id or v.vulnerability_id or '—' %}
+        <td style="max-width:300px;" title="{{ display_name }}">
+          <div style="display:flex;align-items:center;gap:6px;min-width:0;">
+            <a href="{{ url_for('vulnerability_detail', vuln_id=v.id) }}"
+               class="text-white text-decoration-none"
+               style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;">{{ display_name }}</a>
+            {% if v.vulnerability_id and v.vulnerability_id.startswith('CVE-') %}
+            <a href="https://nvd.nist.gov/vuln/detail/{{ v.vulnerability_id }}"
+               target="_blank" rel="noopener"
+               class="text-info flex-shrink-0"
+               title="View {{ v.vulnerability_id }} on NVD/NIST"
+               onclick="event.stopPropagation();">
+              <i class="bi bi-box-arrow-up-right" style="font-size:.7rem;"></i>
+            </a>
+            {% endif %}
+          </div>
+        </td>
+        <td class="text-secondary small">{{ v.plugin_family }}</td>
+        <td class="text-secondary small">{{ v.port }}{% if v.protocol %}/{{ v.protocol }}{% endif %}</td>
+        <td class="small">{% if v.cvss_v3_score %}<span class="badge bg-secondary">{{ v.cvss_v3_score }}</span>{% else %}—{% endif %}</td>
+        <td class="text-secondary small">{{ v.first_seen.strftime('%Y-%m-%d') if v.first_seen else '—' }}</td>
+        <td class="text-secondary small">{{ v.last_seen.strftime('%Y-%m-%d') if v.last_seen else '—' }}</td>
+        <td><a href="{{ url_for('vulnerability_detail', vuln_id=v.id) }}" class="btn btn-outline-secondary btn-sm py-0">Detail</a></td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const histData   = {{ history_data|safe }};
+const families   = {{ families|tojson }};
+
+if (histData.length > 1) {
+  new Chart(document.getElementById('histChart'), {
+    type: 'line',
+    data: {
+      labels: histData.map(d => d.date),
+      datasets: [
+        { label: 'Total',    data: histData.map(d => d.total),    borderColor: '#8b949e', tension: 0.3 },
+        { label: 'Critical', data: histData.map(d => d.critical), borderColor: '#da3633', tension: 0.3, fill: true, backgroundColor: '#da363322' },
+        { label: 'High',     data: histData.map(d => d.high),     borderColor: '#d29922', tension: 0.3 },
+        { label: 'Medium',   data: histData.map(d => d.medium),   borderColor: '#1f6feb', tension: 0.3 },
+      ]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { position: 'bottom', labels: { font: { size: 11 } } } },
+      scales: { x: { grid: { color: '#30363d' } }, y: { grid: { color: '#30363d' }, beginAtZero: true } }
+    }
+  });
+} else {
+  document.getElementById('histChart').parentElement.innerHTML += '<p class="text-secondary small mt-2">Only one import — trend available after next weekly scan.</p>';
+  document.getElementById('histChart').style.display = 'none';
+}
+
+new Chart(document.getElementById('familyChart'), {
+  type: 'bar',
+  data: {
+    labels: families.map(f => f[0]),
+    datasets: [{ label: 'Count', data: families.map(f => f[1]), backgroundColor: '#1f6feb99', borderColor: '#1f6feb', borderWidth: 1 }]
+  },
+  options: {
+    indexAxis: 'y',
+    responsive: true,
+    plugins: { legend: { display: false } },
+    scales: { x: { grid: { color: '#30363d' }, beginAtZero: true }, y: { grid: { color: '#30363d' }, ticks: { font: { size: 11 } } } }
+  }
+});
+
+$(document).ready(function() {
+  $('#vulnTable').DataTable({ order: [[0,'desc']], pageLength: 25, columnDefs: [{ orderable: false, targets: -1 }] });
+});
+</script>
+{% endblock %}

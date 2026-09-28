@@ -1,0 +1,399 @@
+{% extends "base.html" %}
+{% block title %}CVE Analysis{% endblock %}
+
+{% block head %}
+<style>
+  .cve-row { cursor: pointer; }
+  .cve-row:hover td { background: #21262d !important; }
+  .cve-tag { font-family: monospace; font-size: .82rem; font-weight: 600; color: #58a6ff; }
+</style>
+{% endblock %}
+
+{% block content %}
+{% if no_data %}
+<div class="text-center py-5">
+  <i class="bi bi-shield-x text-secondary" style="font-size:4rem;"></i>
+  <h4 class="mt-3 text-white">No data yet</h4>
+  <p class="text-secondary">Import a scan to start CVE analysis.</p>
+</div>
+{% else %}
+
+<!-- Header -->
+<div class="d-flex align-items-center justify-content-between mb-4 flex-wrap gap-2">
+  <div>
+    <h4 class="fw-bold mb-0">CVE Analysis</h4>
+    <small class="text-secondary">{{ latest.report_date }} · {{ cve_rows|length }} CVEs in this scan</small>
+  </div>
+  <select class="form-select form-select-sm" style="width:auto;"
+          onchange="window.location='?import_id='+this.value">
+    {% for imp in all_imports %}
+    <option value="{{ imp.id }}" {% if imp.id == current_import_id %}selected{% endif %}>
+      {{ imp.report_date or imp.imported_at.strftime('%Y-%m-%d') }}
+    </option>
+    {% endfor %}
+  </select>
+</div>
+
+<!-- KPIs -->
+<div class="row g-3 mb-4">
+  <div class="col-6 col-md-4 col-lg-2">
+    <div class="card kpi-card h-100 p-3 text-center" onclick="clearFilters()">
+      <div class="text-secondary small mb-1">Unique CVEs</div>
+      <div class="display-5 fw-bold text-white">{{ '{:,}'.format(total_cves) }}</div>
+      <div class="text-secondary" style="font-size:.7rem;">in this scan</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-4 col-lg-2">
+    <a href="?import_id={{ current_import_id }}&severity=Critical" class="text-decoration-none">
+      <div class="card kpi-card h-100 p-3 text-center" style="border-color:#da3633;">
+        <div class="text-secondary small mb-1">Critical + High</div>
+        <div class="display-5 fw-bold" style="color:#da3633;">{{ '{:,}'.format(critical_high) }}</div>
+        <div class="text-secondary" style="font-size:.7rem;">click to filter</div>
+      </div>
+    </a>
+  </div>
+  <div class="col-6 col-md-4 col-lg-2">
+    <div class="card h-100 p-3 text-center" style="border-color:#d29922;">
+      <div class="text-secondary small mb-1">Avg CVSS</div>
+      <div class="display-5 fw-bold" style="color:#d29922;">{{ avg_cvss }}</div>
+      <div class="text-secondary" style="font-size:.7rem;">across scored CVEs</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-4 col-lg-2">
+    <a href="?import_id={{ current_import_id }}&severity=Critical&year=" class="text-decoration-none">
+      <div class="card kpi-card h-100 p-3 text-center" style="border-color:#1f6feb;">
+        <div class="text-secondary small mb-1">With CVSS Score</div>
+        <div class="display-5 fw-bold" style="color:#1f6feb;">{{ '{:,}'.format(with_cvss) }}</div>
+        <div class="text-secondary" style="font-size:.7rem;">scored CVEs</div>
+      </div>
+    </a>
+  </div>
+  <div class="col-6 col-md-4 col-lg-2">
+    <div class="card h-100 p-3 text-center">
+      <div class="text-secondary small mb-1">Assets Affected</div>
+      <div class="display-5 fw-bold text-white">{{ '{:,}'.format(affected_assets) }}</div>
+      <div class="text-secondary" style="font-size:.7rem;">unique assets</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-4 col-lg-2">
+    <div class="card h-100 p-3 text-center">
+      <div class="text-secondary small mb-1">Total Instances</div>
+      <div class="display-5 fw-bold text-white">{{ '{:,}'.format(total_instances) }}</div>
+      <div class="text-secondary" style="font-size:.7rem;">host×CVE findings</div>
+    </div>
+  </div>
+</div>
+
+<!-- Charts -->
+<div class="row g-4 mb-4">
+  <!-- Top 15 CVEs by hosts -->
+  <div class="col-lg-6">
+    <div class="card p-3 h-100">
+      <h6 class="text-secondary mb-1">Top CVEs by Hosts Affected <small class="fw-normal">(click to detail)</small></h6>
+      <canvas id="top15Chart" style="cursor:pointer;" height="260"></canvas>
+    </div>
+  </div>
+
+  <!-- Right column: 3 small charts -->
+  <div class="col-lg-6">
+    <div class="row g-3 h-100">
+      <div class="col-md-6">
+        <div class="card p-3 h-100">
+          <h6 class="text-secondary mb-2">By Severity</h6>
+          <canvas id="sevChart" style="cursor:pointer;" height="180"></canvas>
+        </div>
+      </div>
+      <div class="col-md-6">
+        <div class="card p-3 h-100">
+          <h6 class="text-secondary mb-2">By Year</h6>
+          <canvas id="yearChart" style="cursor:pointer;" height="180"></canvas>
+        </div>
+      </div>
+      <div class="col-12">
+        <div class="card p-3">
+          <h6 class="text-secondary mb-2">CVSS Score Distribution</h6>
+          <canvas id="cvssChart" height="85"></canvas>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Filter bar -->
+<div class="card p-3 mb-3">
+  <form method="get" class="row g-2 align-items-end">
+    <input type="hidden" name="import_id" value="{{ current_import_id }}">
+    <div class="col-md-3">
+      <label class="form-label small text-secondary mb-1">Search CVE / Description</label>
+      <input type="text" name="search" class="form-control form-control-sm"
+             placeholder="CVE-2021-44228, log4j…" value="{{ search }}">
+    </div>
+    <div class="col-md-2">
+      <label class="form-label small text-secondary mb-1">Severity</label>
+      <select name="severity" class="form-select form-select-sm">
+        <option value="">All</option>
+        {% for s in ['Critical','High','Medium','Low','Informational'] %}
+        <option value="{{ s }}" {% if sev_filter==s %}selected{% endif %}>{{ s }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-2">
+      <label class="form-label small text-secondary mb-1">Year</label>
+      <select name="year" class="form-select form-select-sm">
+        <option value="">All years</option>
+        {% for y in all_years %}
+        <option value="{{ y }}" {% if year_filter==y %}selected{% endif %}>{{ y }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-auto d-flex gap-2">
+      <button type="submit" class="btn btn-sm btn-primary">Filter</button>
+      {% if sev_filter or year_filter or search %}
+      <a href="?import_id={{ current_import_id }}" class="btn btn-sm btn-outline-secondary">Clear</a>
+      {% endif %}
+    </div>
+  </form>
+</div>
+
+<!-- CVE Table -->
+<div class="card">
+  <div class="p-3 border-bottom border-secondary d-flex align-items-center justify-content-between flex-wrap gap-2">
+    <h6 class="mb-0">All CVEs</h6>
+    <div class="d-flex align-items-center gap-2">
+      <small class="text-secondary">
+        {% if row_limit and total_rows > cve_rows|length %}
+          Showing top <strong class="text-white">{{ '{:,}'.format(cve_rows|length) }}</strong>
+          of {{ '{:,}'.format(total_rows) }}
+        {% else %}
+          {{ '{:,}'.format(total_rows) }} row{{ 's' if total_rows != 1 }}
+        {% endif %}
+      </small>
+      <select class="form-select form-select-sm bg-dark border-secondary text-white" style="width:auto;"
+              onchange="const u=new URL(window.location);u.searchParams.set('limit',this.value);window.location=u">
+        {% for n in row_limits %}
+        <option value="{{ n }}" {% if row_limit == n %}selected{% endif %}>Top {{ '{:,}'.format(n) }}</option>
+        {% endfor %}
+        <option value="0" {% if row_limit == 0 %}selected{% endif %}>All ({{ '{:,}'.format(total_rows) }})</option>
+      </select>
+    </div>
+  </div>
+  {% if row_limit == 0 and total_rows > 2000 %}
+  <div class="px-3 py-2 small" style="background:#2a2410;color:#e3c766;border-bottom:1px solid #6a5a20;">
+    <i class="bi bi-exclamation-triangle me-1"></i>
+    Rendering all {{ '{:,}'.format(total_rows) }} rows. This is slow in the browser.
+  </div>
+  {% endif %}
+  <div class="table-responsive">
+    <table id="cveTable" class="table table-sm table-hover mb-0" style="width:100%">
+      <thead>
+        <tr>
+          <th>CVE ID</th>
+          <th>Year</th>
+          <th>Severity</th>
+          <th>CVSS V3</th>
+          <th>CVSS V4</th>
+          <th>Hosts</th>
+          <th>Instances</th>
+          <th>Synopsis</th>
+          <th>First Seen</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for r in cve_rows %}
+      {% set cve_year = r.cve_id[4:8] %}
+      <tr class="cve-row"
+          onclick="window.location='{{ url_for('cve_detail', cve_id=r.cve_id) }}?import_id={{ current_import_id }}'">
+        <td onclick="event.stopPropagation()">
+          <a href="https://nvd.nist.gov/vuln/detail/{{ r.cve_id }}" target="_blank" rel="noopener"
+             class="cve-tag text-decoration-none" title="View on NIST NVD">
+            {{ r.cve_id }} <i class="bi bi-box-arrow-up-right" style="font-size:.65rem;opacity:.6;"></i>
+          </a>
+        </td>
+        <td class="text-secondary small">{{ cve_year }}</td>
+        <td><span class="badge sev-badge-{{ r.risk_factor }}">{{ r.risk_factor }}</span></td>
+        <td>
+          {% if r.cvss3 %}
+          <div class="d-flex align-items-center gap-1">
+            <div class="progress" style="width:40px;height:5px;">
+              <div class="progress-bar
+                {% if r.cvss3 >= 9 %}bg-danger{% elif r.cvss3 >= 7 %}bg-warning{% elif r.cvss3 >= 4 %}bg-info{% else %}bg-success{% endif %}"
+                   style="width:{{ (r.cvss3/10*100)|int }}%"></div>
+            </div>
+            <span class="small text-white">{{ r.cvss3 }}</span>
+          </div>
+          {% else %}<span class="text-secondary">—</span>{% endif %}
+        </td>
+        <td class="small">{% if r.cvss4 %}<span class="badge bg-secondary">{{ r.cvss4 }}</span>{% else %}<span class="text-secondary">—</span>{% endif %}</td>
+        <td>
+          <div class="d-flex align-items-center gap-1">
+            <div class="progress" style="width:30px;height:5px;">
+              <div class="progress-bar bg-primary"
+                   style="width:{{ ([r.host_count, 20]|min / 20 * 100)|int }}%"></div>
+            </div>
+            <span class="text-white">{{ '{:,}'.format(r.host_count) }}</span>
+          </div>
+        </td>
+        <td class="text-secondary">{{ '{:,}'.format(r.instance_count) }}</td>
+        <td class="text-secondary small"
+            style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
+            title="{{ r.synopsis }}">{{ r.synopsis or '—' }}</td>
+        <td class="text-secondary small">{{ r.first_seen.strftime('%Y-%m-%d') if r.first_seen else '—' }}</td>
+        <td onclick="event.stopPropagation()">
+          <a href="{{ url_for('cve_detail', cve_id=r.cve_id) }}?import_id={{ current_import_id }}"
+             class="btn btn-outline-secondary btn-sm py-0">Detail</a>
+        </td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if not no_data %}
+<script>
+const top15Data   = {{ top15_json|safe }};
+const sevDist     = {{ sev_dist_json|safe }};
+const yearDist    = {{ year_dist_json|safe }};
+const cvssBuckets = {{ cvss_buckets_json|safe }};
+const importId    = {{ current_import_id }};
+
+// ── Top 15 horizontal bar ─────────────────────────────────────────────────────
+const SEV_COLOR = { Critical:'#da3633', High:'#d29922', Medium:'#1f6feb', Low:'#238636', None:'#6e7681' };
+
+const top15Chart = new Chart(document.getElementById('top15Chart'), {
+  type: 'bar',
+  data: {
+    labels: top15Data.map(d => d[0]),
+    datasets: [{
+      label: 'Hosts',
+      data: top15Data.map(d => d[1]),
+      backgroundColor: top15Data.map(d => (SEV_COLOR[d[3]] || '#6e7681') + '99'),
+      borderColor:     top15Data.map(d => SEV_COLOR[d[3]] || '#6e7681'),
+      borderWidth: 1,
+      hoverBackgroundColor: top15Data.map(d => (SEV_COLOR[d[3]] || '#6e7681') + 'dd'),
+    }]
+  },
+  options: {
+    indexAxis: 'y',
+    responsive: true,
+    plugins: {
+      legend: { display: false },
+      tooltip: { callbacks: {
+        label: ctx => `${ctx.raw} host${ctx.raw!==1?'s':''} · CVSS ${top15Data[ctx.dataIndex][2] || 'n/a'}`,
+      }}
+    },
+    scales: {
+      x: { grid: { color: '#30363d' }, beginAtZero: true, ticks: { stepSize: 1 } },
+      y: { grid: { color: '#30363d' }, ticks: { font: { size: 11 } } }
+    }
+  }
+});
+document.getElementById('top15Chart').onclick = function(e) {
+  const pts = top15Chart.getElementsAtEventForMode(e, 'nearest', { intersect: true }, true);
+  if (pts.length) {
+    const cveId = top15Data[pts[0].index][0];
+    window.location = '/cves/' + encodeURIComponent(cveId) + '?import_id=' + importId;
+  }
+};
+
+// ── Severity donut ────────────────────────────────────────────────────────────
+const sevChart = new Chart(document.getElementById('sevChart'), {
+  type: 'doughnut',
+  data: {
+    labels: Object.keys(sevDist),
+    datasets: [{
+      data: Object.values(sevDist),
+      backgroundColor: Object.keys(sevDist).map(k => SEV_COLOR[k] || '#6e7681'),
+      borderColor: '#161b22', borderWidth: 2
+    }]
+  },
+  options: {
+    cutout: '60%',
+    plugins: { legend: { position: 'bottom', labels: { font:{size:10}, padding:8 } } }
+  }
+});
+document.getElementById('sevChart').onclick = function(e) {
+  const pts = sevChart.getElementsAtEventForMode(e,'nearest',{intersect:true},true);
+  if (pts.length) {
+    const sev = Object.keys(sevDist)[pts[0].index];
+    window.location = '?import_id=' + importId + '&severity=' + sev;
+  }
+};
+
+// ── Year bar ─────────────────────────────────────────────────────────────────
+const yearKeys = Object.keys(yearDist);
+const yearChart = new Chart(document.getElementById('yearChart'), {
+  type: 'bar',
+  data: {
+    labels: yearKeys,
+    datasets: [{
+      label: 'CVEs',
+      data: Object.values(yearDist),
+      backgroundColor: yearKeys.map(y => {
+        const age = new Date().getFullYear() - parseInt(y);
+        return age <= 1 ? '#da3633cc' : age <= 3 ? '#d29922cc' : age <= 6 ? '#1f6febcc' : '#238636cc';
+      }),
+      borderWidth: 0,
+    }]
+  },
+  options: {
+    responsive: true,
+    plugins: { legend: { display: false },
+               tooltip: { callbacks: { label: ctx => `${ctx.raw} CVE${ctx.raw!==1?'s':''}` } } },
+    scales: {
+      x: { grid: { color: '#30363d' }, ticks: { font: { size: 9 } } },
+      y: { grid: { color: '#30363d' }, beginAtZero: true, ticks: { stepSize: 1 } }
+    }
+  }
+});
+document.getElementById('yearChart').onclick = function(e) {
+  const pts = yearChart.getElementsAtEventForMode(e,'nearest',{intersect:true},true);
+  if (pts.length) {
+    const yr = yearKeys[pts[0].index];
+    window.location = '?import_id=' + importId + '&year=' + yr;
+  }
+};
+
+// ── CVSS distribution ─────────────────────────────────────────────────────────
+new Chart(document.getElementById('cvssChart'), {
+  type: 'bar',
+  data: {
+    labels: Object.keys(cvssBuckets),
+    datasets: [{
+      label: 'CVEs',
+      data: Object.values(cvssBuckets),
+      backgroundColor: ['#238636','#d29922','#fd7e14','#da3633'],
+      borderWidth: 0,
+    }]
+  },
+  options: {
+    responsive: true,
+    plugins: { legend: { display: false } },
+    scales: {
+      x: { grid: { color: '#30363d' } },
+      y: { grid: { color: '#30363d' }, beginAtZero: true, ticks: { stepSize: 1 } }
+    }
+  }
+});
+
+function clearFilters() {
+  window.location = '?import_id=' + importId;
+}
+
+// ── DataTable ────────────────────────────────────────────────────────────────
+$(document).ready(function() {
+  $('#cveTable').DataTable({
+    order: [[3, 'desc'], [5, 'desc']],
+    pageLength: 50,
+    columnDefs: [{ orderable: false, targets: -1 }],
+    language: { search: 'Search table:' }
+  });
+});
+</script>
+{% endif %}
+{% endblock %}

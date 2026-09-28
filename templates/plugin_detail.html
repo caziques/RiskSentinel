@@ -1,0 +1,294 @@
+{% extends "base.html" %}
+{% block title %}{{ sample.plugin_name }}{% endblock %}
+
+{% block content %}
+<div class="mb-3">
+  <a href="{{ url_for('plugins') }}?import_id={{ current_import_id }}" class="text-secondary text-decoration-none small">
+    <i class="bi bi-arrow-left"></i> Back to Plugin Analysis
+  </a>
+</div>
+
+<!-- Header -->
+<div class="d-flex align-items-start gap-3 mb-4 flex-wrap">
+  <div class="flex-grow-1">
+    <div class="d-flex align-items-center gap-2 mb-1 flex-wrap">
+      <span class="badge sev-badge-{{ sample.risk_factor }} fs-6 px-3 py-2">{{ sample.risk_factor }}</span>
+      {% if stats.cvss3 %}
+      <span class="badge fs-6 px-3 py-2
+        {% if stats.cvss3 >= 9 %}bg-danger{% elif stats.cvss3 >= 7 %}bg-warning text-dark{% elif stats.cvss3 >= 4 %}bg-info{% else %}bg-success{% endif %}">
+        CVSS {{ stats.cvss3 }}
+      </span>
+      {% endif %}
+      <span class="badge bg-secondary">{{ sample.plugin_family }}</span>
+    </div>
+    <h4 class="fw-bold mb-1 text-white">{{ sample.plugin_name }}</h4>
+    <div class="text-secondary small font-monospace">Plugin ID: {{ sample.plugin_id }}</div>
+  </div>
+  <select class="form-select form-select-sm flex-shrink-0" style="width:auto;"
+          onchange="window.location='{{ url_for('plugin_detail', plugin_id=sample.plugin_id) }}?import_id='+this.value">
+    {% for imp in all_imports %}
+    <option value="{{ imp.id }}" {% if current_import_id == imp.id %}selected{% endif %}>
+      {{ imp.report_date or imp.imported_at.strftime('%Y-%m-%d') }}
+    </option>
+    {% endfor %}
+  </select>
+</div>
+
+<!-- KPI row -->
+<div class="row g-3 mb-4">
+  <div class="col-6 col-md-3">
+    <div class="card p-3 text-center" style="border-color:#1f6feb;">
+      <div class="text-secondary small mb-1">Hosts Affected</div>
+      <div class="display-5 fw-bold" style="color:#1f6feb;">{{ stats.host_count }}</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="card p-3 text-center">
+      <div class="text-secondary small mb-1">Total Findings</div>
+      <div class="display-5 fw-bold text-white">{{ stats.finding_count }}</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="card p-3 text-center">
+      <div class="text-secondary small mb-1">First Seen</div>
+      <div class="h5 fw-bold text-white mt-1">{{ stats.first_seen.strftime('%Y-%m-%d') if stats.first_seen else '—' }}</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="card p-3 text-center">
+      <div class="text-secondary small mb-1">Last Seen</div>
+      <div class="h5 fw-bold text-white mt-1">{{ stats.last_seen.strftime('%Y-%m-%d') if stats.last_seen else '—' }}</div>
+    </div>
+  </div>
+</div>
+
+<div class="row g-4 mb-4">
+  <!-- Left: details -->
+  <div class="col-lg-8">
+
+    {% if sample.synopsis %}
+    <div class="card p-3 mb-3">
+      <h6 class="text-secondary mb-2"><i class="bi bi-info-circle me-1"></i>Synopsis</h6>
+      <p class="text-white mb-0">{{ sample.synopsis }}</p>
+    </div>
+    {% endif %}
+
+    {% if sample.description %}
+    <div class="card p-3 mb-3">
+      <h6 class="text-secondary mb-2"><i class="bi bi-file-text me-1"></i>Description</h6>
+      <pre class="text-white mb-0" style="white-space:pre-wrap;font-family:inherit;font-size:.875rem;">{{ sample.description }}</pre>
+    </div>
+    {% endif %}
+
+    {% if sample.solution and sample.solution != 'n/a' %}
+    <div class="card p-3 mb-3" style="border-color:#238636;">
+      <h6 class="text-success mb-2"><i class="bi bi-patch-check me-1"></i>Solution / Remediation</h6>
+      <pre class="text-white mb-0" style="white-space:pre-wrap;font-family:inherit;font-size:.875rem;">{{ sample.solution }}</pre>
+    </div>
+    {% endif %}
+
+    <!-- Trend chart -->
+    <div class="card p-3">
+      <h6 class="text-secondary mb-3"><i class="bi bi-graph-up me-1"></i>Presence Over Time</h6>
+      {% if history_data != '[]' %}
+      <canvas id="histChart" height="130"></canvas>
+      {% else %}
+      <p class="text-secondary small mb-0">Only one import available — trend will appear after subsequent weekly scans.</p>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Right: metadata + scores -->
+  <div class="col-lg-4">
+
+    <!-- Metadata -->
+    <div class="card p-3 mb-3">
+      <h6 class="text-secondary mb-3"><i class="bi bi-tag me-1"></i>Metadata</h6>
+      <dl class="mb-0" style="display:grid;grid-template-columns:auto 1fr;gap:.3rem .75rem;font-size:.85rem;">
+        <dt class="text-secondary">Plugin ID</dt>
+        <dd class="font-monospace text-white">{{ sample.plugin_id }}</dd>
+        <dt class="text-secondary">Family</dt>
+        <dd>
+          <a href="{{ url_for('family_detail', family_name=sample.plugin_family) }}?import_id={{ current_import_id }}"
+             class="text-white text-decoration-none">{{ sample.plugin_family }}</a>
+        </dd>
+        {% if sample.protocol %}
+        <dt class="text-secondary">Protocol</dt>
+        <dd class="text-white">{{ sample.protocol|upper }}</dd>
+        {% endif %}
+      </dl>
+    </div>
+
+    <!-- CVSS -->
+    {% if stats.cvss3 or stats.cvss4 %}
+    <div class="card p-3 mb-3">
+      <h6 class="text-secondary mb-3"><i class="bi bi-speedometer me-1"></i>CVSS Scores</h6>
+      {% if stats.cvss3 %}
+      <div class="mb-3">
+        <div class="d-flex justify-content-between mb-1">
+          <span class="small text-secondary">CVSS v3 {{ '('+sample.cvss_v3_severity+')' if sample.cvss_v3_severity else '' }}</span>
+          <span class="fw-bold text-white">{{ stats.cvss3 }}</span>
+        </div>
+        <div class="progress mb-1" style="height:12px;border-radius:6px;">
+          <div class="progress-bar
+            {% if stats.cvss3 >= 9 %}bg-danger{% elif stats.cvss3 >= 7 %}bg-warning{% elif stats.cvss3 >= 4 %}bg-info{% else %}bg-success{% endif %}"
+               style="width:{{ (stats.cvss3/10*100)|int }}%;border-radius:6px;"></div>
+        </div>
+        <div class="d-flex justify-content-between" style="font-size:.7rem;color:#6e7681;">
+          <span>0</span><span>Low</span><span>Med</span><span>High</span><span>10</span>
+        </div>
+      </div>
+      {% endif %}
+      {% if stats.cvss4 %}
+      <div>
+        <div class="d-flex justify-content-between mb-1">
+          <span class="small text-secondary">CVSS v4 {{ '('+sample.cvss_v4_severity+')' if sample.cvss_v4_severity else '' }}</span>
+          <span class="fw-bold text-white">{{ stats.cvss4 }}</span>
+        </div>
+        <div class="progress" style="height:12px;border-radius:6px;">
+          <div class="progress-bar bg-warning"
+               style="width:{{ (stats.cvss4/10*100)|int }}%;border-radius:6px;"></div>
+        </div>
+      </div>
+      {% endif %}
+    </div>
+    {% endif %}
+
+    <!-- Ports this plugin fires on -->
+    {% if port_rows %}
+    <div class="card p-3 mb-3">
+      <h6 class="text-secondary mb-3"><i class="bi bi-diagram-3 me-1"></i>Ports</h6>
+      <div class="d-flex flex-wrap gap-1">
+        {% for r in port_rows %}
+        <a href="{{ url_for('port_detail', port=r[0], proto=r[1]) }}?import_id={{ current_import_id }}"
+           class="badge font-monospace text-decoration-none
+             {% if r[0] in ['21','23','3389','5985','5986','445','1433','3306','5432','6379','22'] %}sev-badge-High{% else %}bg-secondary{% endif %}"
+           title="{{ well_known.get(r[0], r[0]) }}/{{ r[1] }} — {{ r[2] }} host{{ 's' if r[2]!=1 }}">
+          {{ r[0] }}/{{ r[1] }}
+        </a>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- CPE -->
+    {% if sample.cpe %}
+    <div class="card p-3">
+      <h6 class="text-secondary mb-2"><i class="bi bi-box me-1"></i>CPE</h6>
+      <code class="text-secondary small" style="word-break:break-all;font-size:.75rem;">{{ sample.cpe }}</code>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Affected Hosts -->
+<div class="card p-3 mb-4">
+  <div class="d-flex align-items-center justify-content-between mb-3">
+    <h6 class="text-secondary mb-0"><i class="bi bi-hdd-network me-1"></i>Affected Hosts ({{ host_rows|length }})</h6>
+    <a href="{{ url_for('vulnerabilities') }}?import_id={{ current_import_id }}&search={{ sample.plugin_name[:40] }}"
+       class="btn btn-sm btn-outline-secondary">View in Vulnerabilities</a>
+  </div>
+  <div class="table-responsive">
+    <table id="hostTable" class="table table-sm table-hover mb-0" style="width:100%">
+      <thead>
+        <tr><th>Asset</th><th>IP</th><th>Findings</th><th>Ports</th><th>First Seen</th><th>Last Seen</th><th></th></tr>
+      </thead>
+      <tbody>
+      {% for h in host_rows %}
+      <tr>
+        <td>
+          <a href="{{ url_for('asset_detail', asset_name=h.asset) }}?import_id={{ current_import_id }}"
+             class="text-white fw-semibold text-decoration-none">{{ h.asset }}</a>
+        </td>
+        <td class="text-secondary small">{{ h.ip_address }}</td>
+        <td class="text-white">{{ h.findings }}</td>
+        <td>
+          {% if h.ports %}
+          <div class="d-flex flex-wrap gap-1">
+            {% for p in h.ports.split(',')[:8] %}
+            {% set p = p.strip() %}
+            {% if p and p != '0' %}
+            <span class="badge bg-secondary font-monospace" style="font-size:.7rem;">{{ p }}</span>
+            {% endif %}
+            {% endfor %}
+            {% if h.ports.split(',')|length > 8 %}
+            <span class="badge bg-secondary" style="font-size:.7rem;">+{{ h.ports.split(',')|length - 8 }}</span>
+            {% endif %}
+          </div>
+          {% else %}—{% endif %}
+        </td>
+        <td class="text-secondary small">{{ h.first_seen.strftime('%Y-%m-%d') if h.first_seen else '—' }}</td>
+        <td class="text-secondary small">{{ h.last_seen.strftime('%Y-%m-%d') if h.last_seen else '—' }}</td>
+        <td>
+          <a href="{{ url_for('asset_detail', asset_name=h.asset) }}?import_id={{ current_import_id }}"
+             class="btn btn-outline-secondary btn-sm py-0">Asset</a>
+        </td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Similar plugins -->
+{% if similar %}
+<div class="card p-3">
+  <h6 class="text-secondary mb-3"><i class="bi bi-collection me-1"></i>Similar Plugins in {{ sample.plugin_family }} Family</h6>
+  <div class="table-responsive">
+    <table id="similarTable" class="table table-sm table-hover mb-0" style="width:100%">
+      <thead><tr><th>Plugin Name</th><th>Severity</th><th>Hosts</th><th></th></tr></thead>
+      <tbody>
+      {% for s in similar %}
+      <tr>
+        <td class="text-white small" style="max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
+            title="{{ s.plugin_name }}">{{ s.plugin_name }}</td>
+        <td><span class="badge sev-badge-{{ s.risk_factor }}">{{ s.risk_factor }}</span></td>
+        <td class="text-white">{{ s.hosts }}</td>
+        <td>
+          <a href="{{ url_for('plugin_detail', plugin_id=s.plugin_id) }}?import_id={{ current_import_id }}"
+             class="btn btn-outline-secondary btn-sm py-0">Detail</a>
+        </td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+const histData = {{ history_data|safe }};
+
+if (histData.length > 1) {
+  new Chart(document.getElementById('histChart'), {
+    type: 'line',
+    data: {
+      labels: histData.map(d => d.date),
+      datasets: [
+        { label: 'Hosts Affected', data: histData.map(d => d.hosts),
+          borderColor: '#1f6feb', backgroundColor: '#1f6feb22', tension: 0.3, fill: true, yAxisID: 'y' },
+        { label: 'Total Findings', data: histData.map(d => d.findings),
+          borderColor: '#d29922', tension: 0.3, borderDash: [4,4], yAxisID: 'y' },
+      ]
+    },
+    options: {
+      responsive: true,
+      interaction: { mode: 'index' },
+      plugins: { legend: { position: 'bottom', labels: { font: { size: 11 } } } },
+      scales: {
+        x: { grid: { color: '#30363d' } },
+        y: { grid: { color: '#30363d' }, beginAtZero: true, ticks: { stepSize: 1 } }
+      }
+    }
+  });
+}
+
+$(document).ready(function() {
+  $('#hostTable').DataTable({ order: [[2,'desc']], pageLength: 25, columnDefs: [{ orderable: false, targets: -1 }] });
+  if ($('#similarTable').length)
+    $('#similarTable').DataTable({ order: [[2,'desc']], pageLength: 10, columnDefs: [{ orderable: false, targets: -1 }] });
+});
+</script>
+{% endblock %}

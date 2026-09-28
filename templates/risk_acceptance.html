@@ -1,0 +1,446 @@
+{% extends 'base.html' %}
+{% block title %}Risk Acceptance Register{% endblock %}
+
+{% block head %}
+<style>
+  .ra-tag   { font-family: monospace; font-size: .85rem; font-weight: 700; letter-spacing: .03em; }
+  .scope-asset    { background: #1f6feb22; border: 1px solid #1f6feb66; color: #58a6ff; }
+  .scope-finding  { background: #d2992222; border: 1px solid #d2992266; color: #e3b341; }
+  .scope-group    { background: #23863622; border: 1px solid #23863666; color: #3fb950; }
+  .status-Active   { background: #23863633; border: 1px solid #23863688; color: #3fb950; }
+  .status-Expiring { background: #d2992233; border: 1px solid #d2992266; color: #e3b341; }
+  .status-Expired  { background: #da363322; border: 1px solid #da363366; color: #f85149; }
+  .status-Revoked  { background: #30363d;   border: 1px solid #484f58;   color: #8b949e; }
+  .reason-cell { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .filter-pill { cursor: pointer; user-select: none; }
+  .filter-pill.active { outline: 2px solid #58a6ff; }
+</style>
+{% endblock %}
+
+{% block topbar_left %}
+<h6 class="mb-0 fw-semibold"><i class="bi bi-shield-check me-2 text-success"></i>Risk Acceptance Register</h6>
+{% endblock %}
+
+{% block content %}
+
+<!-- KPI row -->
+<div class="row g-3 mb-4">
+  {% set kpis = [
+    ('Total',        total,    'bi-clipboard-data',   '#58a6ff', 'all'),
+    ('Active',       active,   'bi-check-circle',     '#3fb950', 'Active'),
+    ('Expiring Soon',expiring, 'bi-alarm',            '#e3b341', 'Expiring'),
+    ('Expired',      expired,  'bi-x-circle',         '#f85149', 'Expired'),
+    ('Revoked',      revoked,  'bi-slash-circle',     '#8b949e', 'Revoked'),
+  ] %}
+  {% for label, val, icon, color, fkey in kpis %}
+  <div class="col-6 col-md-4 col-xl-2">
+    <div class="card kpi-card kpi-clickable filter-pill h-100" data-filter="{{ fkey }}" onclick="filterByStatus('{{ fkey }}')">
+      <div class="card-body text-center py-3">
+        <i class="{{ icon }} mb-1" style="font-size:1.6rem;color:{{ color }};"></i>
+        <div class="display-6 fw-bold" style="color:{{ color }};">{{ val }}</div>
+        <div class="text-secondary small">{{ label }}</div>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+  <div class="col-6 col-md-4 col-xl-2 d-flex align-items-center justify-content-center">
+    <button class="btn btn-success w-100" onclick="openAddModal()" style="min-height:80px;font-size:1rem;">
+      <i class="bi bi-plus-circle me-2"></i>Accept Risk
+    </button>
+  </div>
+</div>
+
+<!-- Active filter bar -->
+<div id="activeFilterBar" class="mb-3 d-none">
+  <span class="text-secondary small me-2">Filtered by:</span>
+  <span id="activeFilterLabel" class="badge bg-secondary me-2"></span>
+  <button class="btn btn-link btn-sm text-secondary p-0" onclick="clearFilter()">
+    <i class="bi bi-x-circle me-1"></i>Clear
+  </button>
+</div>
+
+<!-- Register table -->
+<div class="card">
+  <div class="card-header d-flex align-items-center justify-content-between py-2">
+    <span class="fw-semibold small text-secondary text-uppercase">
+      <i class="bi bi-table me-1"></i>Acceptance Register
+    </span>
+    <div class="d-flex gap-2 align-items-center">
+      <input type="text" id="raSearch" class="form-control form-control-sm bg-dark border-secondary text-white"
+             style="width:220px;" placeholder="Search…" oninput="applyFilters()">
+    </div>
+  </div>
+  <div class="card-body p-0">
+    {% if entries %}
+    <div class="table-responsive">
+      <table class="table table-hover align-middle mb-0" id="raTable">
+        <thead>
+          <tr>
+            <th>Tag</th>
+            <th>Scope</th>
+            <th>Asset</th>
+            <th>Vulnerability / Plugin</th>
+            <th>Sev</th>
+            <th>Reason</th>
+            <th>Accepted By</th>
+            <th>Date</th>
+            <th>Expires</th>
+            <th>Status</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="raBody">
+          {% for e in entries %}
+          {% set st = e.status %}
+          {% set disp_st = 'Expiring' if e.expiring_soon and st == 'Active' else st %}
+          <tr class="ra-row"
+              data-status="{{ disp_st }}"
+              data-search="{{ (e.tag ~ ' ' ~ (e.asset or '') ~ ' ' ~ (e.plugin_name or '') ~ ' ' ~ (e.vulnerability_id or '') ~ ' ' ~ (e.reason or '') ~ ' ' ~ (e.plugin_id or ''))|lower }}">
+
+            <!-- Tag -->
+            <td><span class="ra-tag text-info">{{ e.tag }}</span></td>
+
+            <!-- Scope -->
+            <td>
+              <span class="badge rounded-pill scope-{{ e.scope }} px-2">
+                {% if e.scope == 'asset' %}
+                  <i class="bi bi-hdd-network me-1"></i>Asset
+                {% elif e.scope == 'group' %}
+                  <i class="bi bi-collection me-1"></i>Group
+                {% else %}
+                  <i class="bi bi-bug me-1"></i>Finding
+                {% endif %}
+              </span>
+            </td>
+
+            <!-- Asset / Group -->
+            <td class="text-white" style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
+                title="{{ e.group.name if e.scope == 'group' and e.group else (e.asset or '—') }}">
+              {% if e.scope == 'group' and e.group %}
+                <a href="{{ url_for('asset_group_detail', group_id=e.group.id) }}"
+                   class="text-success text-decoration-none">
+                  <i class="bi bi-collection me-1" style="font-size:.75rem;"></i>{{ e.group.name }}
+                </a>
+              {% elif e.asset %}
+                <a href="{{ url_for('asset_detail', asset_name=e.asset) }}" class="text-white text-decoration-none">
+                  {{ e.asset }}
+                </a>
+              {% else %}—{% endif %}
+            </td>
+
+            <!-- Vulnerability / Plugin -->
+            <td style="max-width:220px;">
+              {% if e.vulnerability_id and e.vulnerability_id.startswith('CVE-') %}
+                <a href="https://nvd.nist.gov/vuln/detail/{{ e.vulnerability_id }}" target="_blank"
+                   class="text-info text-decoration-none small fw-semibold">
+                  {{ e.vulnerability_id }}&nbsp;<i class="bi bi-box-arrow-up-right" style="font-size:.65rem;"></i>
+                </a><br>
+              {% elif e.vulnerability_id %}
+                <span class="text-secondary small">{{ e.vulnerability_id }}</span><br>
+              {% endif %}
+              {% if e.plugin_name %}
+                <span class="text-white" style="font-size:.8rem;overflow:hidden;text-overflow:ellipsis;display:block;white-space:nowrap;"
+                      title="{{ e.plugin_name }}">{{ e.plugin_name }}</span>
+              {% elif e.plugin_id %}
+                <span class="text-secondary small">Plugin {{ e.plugin_id }}</span>
+              {% elif e.scope == 'asset' %}
+                <span class="text-secondary small fst-italic">All findings on asset</span>
+              {% else %}—{% endif %}
+            </td>
+
+            <!-- Severity -->
+            <td>
+              {% if e.risk_factor %}
+                <span class="badge sev-badge-{{ e.risk_factor }}">{{ e.risk_factor }}</span>
+              {% else %}—{% endif %}
+            </td>
+
+            <!-- Reason -->
+            <td class="reason-cell text-secondary small" title="{{ e.reason }}">{{ e.reason }}</td>
+
+            <!-- Accepted By -->
+            <td class="text-secondary small">{{ e.accepted_by.username if e.accepted_by else '—' }}</td>
+
+            <!-- Accepted Date -->
+            <td class="text-secondary small text-nowrap">{{ e.accepted_at.strftime('%Y-%m-%d') }}</td>
+
+            <!-- Expires -->
+            <td class="small text-nowrap {% if e.expiring_soon %}text-warning{% elif e.expires_at and e.expires_at < now %}text-danger{% else %}text-secondary{% endif %}">
+              {% if e.expires_at %}
+                {{ e.expires_at.strftime('%Y-%m-%d') }}
+                {% if e.expiring_soon %}
+                  <i class="bi bi-alarm ms-1"></i>
+                {% endif %}
+              {% else %}
+                <span class="text-secondary fst-italic">No expiry</span>
+              {% endif %}
+            </td>
+
+            <!-- Status -->
+            <td>
+              <span class="badge rounded-pill status-{{ disp_st }} px-2" style="font-size:.75rem;">{{ disp_st }}</span>
+            </td>
+
+            <!-- Actions -->
+            <td>
+              <div class="d-flex gap-1 align-items-center">
+                {% if not e.revoked %}
+                  <form method="post" action="{{ url_for('risk_acceptance_revoke', entry_id=e.id) }}"
+                        onsubmit="return confirm('Revoke {{ e.tag }}? This cannot be undone.')">
+                    <button type="submit" class="btn btn-outline-warning btn-sm py-0 px-2" title="Revoke">
+                      <i class="bi bi-slash-circle"></i>
+                    </button>
+                  </form>
+                {% else %}
+                  <span class="text-secondary small">Revoked<br>
+                    <span style="font-size:.7rem;">{{ e.revoked_at.strftime('%Y-%m-%d') if e.revoked_at else '' }}</span>
+                  </span>
+                {% endif %}
+                {% if current_user.role == 'admin' %}
+                  <form method="post" action="{{ url_for('risk_acceptance_delete', entry_id=e.id) }}"
+                        onsubmit="return confirm('Permanently delete {{ e.tag }}? This cannot be undone.')">
+                    <button type="submit" class="btn btn-outline-danger btn-sm py-0 px-2" title="Delete permanently">
+                      <i class="bi bi-trash3"></i>
+                    </button>
+                  </form>
+                {% endif %}
+              </div>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="text-center py-5 text-secondary">
+      <i class="bi bi-shield-check" style="font-size:3rem;opacity:.3;"></i>
+      <p class="mt-2">No risk acceptances recorded yet.</p>
+      <button class="btn btn-success" onclick="openAddModal()">
+        <i class="bi bi-plus-circle me-1"></i>Accept First Risk
+      </button>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+
+<!-- ── Add Risk Acceptance Modal ─────────────────────────────────────────── -->
+<div class="modal fade" id="addRaModal" tabindex="-1" data-bs-backdrop="static">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content" style="background:#161b22;border:1px solid #30363d;">
+      <form method="post" action="{{ url_for('risk_acceptance_add') }}">
+        <div class="modal-header border-secondary">
+          <h5 class="modal-title"><i class="bi bi-shield-plus me-2 text-success"></i>Accept Risk</h5>
+          <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+
+          <!-- Scope -->
+          <div class="mb-4">
+            <label class="form-label text-secondary small text-uppercase fw-semibold">Scope</label>
+            <div class="d-flex gap-3 flex-wrap">
+              <div class="form-check">
+                <input class="form-check-input" type="radio" name="scope" id="scopeFinding" value="finding"
+                       onchange="toggleScope(this.value)"
+                       {% if prefill_scope == 'finding' or (not prefill_scope and not (prefill_asset and not prefill_plugin_id)) %}checked{% endif %}>
+                <label class="form-check-label" for="scopeFinding">
+                  <i class="bi bi-bug me-1 text-warning"></i>Specific Finding on Asset
+                </label>
+              </div>
+              <div class="form-check">
+                <input class="form-check-input" type="radio" name="scope" id="scopeAsset" value="asset"
+                       onchange="toggleScope(this.value)"
+                       {% if prefill_scope == 'asset' or (not prefill_scope and prefill_asset and not prefill_plugin_id) %}checked{% endif %}>
+                <label class="form-check-label" for="scopeAsset">
+                  <i class="bi bi-hdd-network me-1 text-info"></i>Whole Asset (all findings)
+                </label>
+              </div>
+              <div class="form-check">
+                <input class="form-check-input" type="radio" name="scope" id="scopeGroup" value="group"
+                       onchange="toggleScope(this.value)"
+                       {% if prefill_scope == 'group' %}checked{% endif %}>
+                <label class="form-check-label" for="scopeGroup">
+                  <i class="bi bi-collection me-1 text-success"></i>Asset Group (all assets in group)
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <!-- Group picker (shown only for group scope) -->
+          <div id="groupFields" class="mb-3" style="display:none;">
+            <label class="form-label text-secondary small">Asset Group <span class="text-danger">*</span></label>
+            <select name="group_id" id="raGroupId" class="form-select bg-dark border-secondary text-white">
+              <option value="">— Select a group —</option>
+              {% for g in groups %}
+              <option value="{{ g.id }}" {% if prefill_group_id == g.id|string %}selected{% endif %}>
+                {{ g.name }}{% if g.description %} — {{ g.description[:60] }}{% endif %}
+              </option>
+              {% endfor %}
+            </select>
+            {% if not groups %}
+            <div class="form-text text-secondary">
+              No groups yet. <a href="{{ url_for('asset_groups_list') }}" class="text-info">Create one first.</a>
+            </div>
+            {% endif %}
+          </div>
+
+          <div id="assetFields" class="row g-3">
+            <!-- Asset -->
+            <div class="col-md-6">
+              <label class="form-label text-secondary small">Asset <span class="text-danger">*</span></label>
+              <input type="text" name="asset" id="raAsset" list="assetList"
+                     class="form-control bg-dark border-secondary text-white"
+                     placeholder="Hostname or IP"
+                     value="{{ prefill_asset }}">
+              <datalist id="assetList">
+                {% for a in assets %}<option value="{{ a }}">{% endfor %}
+              </datalist>
+            </div>
+
+            <!-- Severity -->
+            <div class="col-md-6" id="severityRow">
+              <label class="form-label text-secondary small">Severity</label>
+              <select name="risk_factor" class="form-select bg-dark border-secondary text-white">
+                <option value="">— Unknown —</option>
+                {% for sev in ['Critical','High','Medium','Low','Informational'] %}
+                  <option value="{{ sev }}" {% if prefill_risk_factor == sev %}selected{% endif %}>{{ sev }}</option>
+                {% endfor %}
+              </select>
+            </div>
+
+            <!-- Plugin fields (hidden for asset scope) -->
+            <div id="findingFields" class="col-12">
+              <div class="row g-3">
+                <div class="col-md-4">
+                  <label class="form-label text-secondary small">Plugin ID</label>
+                  <input type="text" name="plugin_id" id="raPluginId"
+                         class="form-control bg-dark border-secondary text-white"
+                         placeholder="e.g. 10116"
+                         value="{{ prefill_plugin_id }}">
+                </div>
+                <div class="col-md-8">
+                  <label class="form-label text-secondary small">Plugin / Vulnerability Name</label>
+                  <input type="text" name="plugin_name" id="raPluginName"
+                         class="form-control bg-dark border-secondary text-white"
+                         placeholder="e.g. SSH Weak Algorithms Supported"
+                         value="{{ prefill_plugin_name }}">
+                </div>
+                <div class="col-md-12">
+                  <label class="form-label text-secondary small">CVE / Vulnerability ID</label>
+                  <input type="text" name="vulnerability_id" id="raVulnId"
+                         class="form-control bg-dark border-secondary text-white"
+                         placeholder="e.g. CVE-2023-12345 or TENABLE-NOCVE-…"
+                         value="{{ prefill_vuln_id }}">
+                </div>
+              </div>
+            </div>
+
+          </div>
+
+          <!-- Reason / Expiry / Notes — always visible regardless of scope -->
+          <div class="row g-3 mt-1">
+            <div class="col-12">
+              <label class="form-label text-secondary small">Reason <span class="text-danger">*</span></label>
+              <textarea name="reason" class="form-control bg-dark border-secondary text-white"
+                        rows="3" placeholder="Business justification for accepting this risk…" required></textarea>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label text-secondary small">Expiry Date <span class="text-danger">*</span></label>
+              <input type="date" name="expires_at" required
+                     min="{{ ra_min_expiry }}" max="{{ ra_max_expiry }}"
+                     value="{{ ra_max_expiry }}"
+                     class="form-control bg-dark border-secondary text-white">
+              <div class="form-text text-secondary">
+                Maximum {{ max_ra_days }} days (NBL-IT-020 section 19.2). Latest permitted: {{ ra_max_expiry }}.
+              </div>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label text-secondary small">Additional Notes <span class="text-muted">(optional)</span></label>
+              <textarea name="notes" class="form-control bg-dark border-secondary text-white"
+                        rows="2" placeholder="Any additional context…"></textarea>
+            </div>
+          </div>
+
+        </div>
+        <div class="modal-footer border-secondary">
+          <div class="me-auto text-secondary small">
+            <i class="bi bi-tag me-1"></i>A unique <code>RA-YYYY-NNN</code> tag will be assigned automatically.
+          </div>
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-success">
+            <i class="bi bi-shield-check me-1"></i>Accept Risk
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+const modal = new bootstrap.Modal(document.getElementById('addRaModal'));
+let activeFilter = 'all';
+
+function openAddModal() { modal.show(); }
+
+// Auto-open if requested from another page
+{% if auto_open %}
+document.addEventListener('DOMContentLoaded', () => modal.show());
+{% endif %}
+
+function toggleScope(scope) {
+  const ff  = document.getElementById('findingFields');
+  const af  = document.getElementById('assetFields');
+  const gf  = document.getElementById('groupFields');
+  const gid = document.getElementById('raGroupId');
+
+  if (scope === 'group') {
+    af.style.display = 'none';
+    ff.style.display = 'none';
+    gf.style.display = '';
+    if (gid) gid.setAttribute('required', '');
+  } else if (scope === 'asset') {
+    af.style.display = '';
+    ff.style.display = 'none';
+    gf.style.display = 'none';
+    if (gid) gid.removeAttribute('required');
+  } else {
+    af.style.display = '';
+    ff.style.display = '';
+    gf.style.display = 'none';
+    if (gid) gid.removeAttribute('required');
+  }
+}
+// Set initial state
+toggleScope(document.querySelector('input[name="scope"]:checked')?.value || 'finding');
+
+/* ── Filtering ─────────────────────────────────────────────────── */
+function filterByStatus(fkey) {
+  activeFilter = fkey;
+  document.querySelectorAll('.filter-pill').forEach(el => {
+    el.classList.toggle('active', el.dataset.filter === fkey);
+  });
+  const bar = document.getElementById('activeFilterBar');
+  if (fkey === 'all') {
+    bar.classList.add('d-none');
+  } else {
+    bar.classList.remove('d-none');
+    document.getElementById('activeFilterLabel').textContent = fkey;
+  }
+  applyFilters();
+}
+
+function clearFilter() { filterByStatus('all'); }
+
+function applyFilters() {
+  const q = document.getElementById('raSearch').value.toLowerCase();
+  document.querySelectorAll('.ra-row').forEach(row => {
+    const statusOk = activeFilter === 'all' || row.dataset.status === activeFilter;
+    const searchOk = !q || row.dataset.search.includes(q);
+    row.style.display = (statusOk && searchOk) ? '' : 'none';
+  });
+}
+</script>
+{% endblock %}

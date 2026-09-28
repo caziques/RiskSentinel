@@ -1,0 +1,404 @@
+{% extends "base.html" %}
+{% block title %}User Management{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-end mb-4 flex-wrap gap-2">
+  <div>
+    <h4 class="fw-bold mb-0">User Management</h4>
+    <small class="text-secondary"><span id="userCount">{{ users|length }}</span> users · manage access and roles</small>
+  </div>
+  <div class="d-flex gap-2">
+    <div class="input-group input-group-sm" style="width:220px;">
+      <span class="input-group-text bg-dark border-secondary text-secondary"><i class="bi bi-search"></i></span>
+      <input type="text" id="userSearch" class="form-control form-control-sm bg-dark border-secondary text-white"
+             placeholder="Search users…" autocomplete="off">
+    </div>
+    <select id="roleFilter" class="form-select form-select-sm bg-dark border-secondary text-white" style="width:auto;">
+      <option value="">All roles</option>
+      <option value="admin">Admin</option>
+      <option value="analyst">Analyst</option>
+      <option value="viewer">Viewer</option>
+    </select>
+  </div>
+</div>
+
+<div class="row g-4">
+  <!-- Add User -->
+  <div class="col-lg-4">
+    <div class="card p-4">
+      <h6 class="text-secondary mb-3"><i class="bi bi-person-plus me-1"></i>Add New User</h6>
+      <form id="addUserForm">
+        <div class="mb-3">
+          <label class="form-label small text-secondary">Username</label>
+          <input type="text" name="username" class="form-control form-control-sm" required placeholder="e.g. jsmith">
+        </div>
+        <div class="mb-3">
+          <label class="form-label small text-secondary">Email (optional)</label>
+          <input type="email" name="email" class="form-control form-control-sm" placeholder="user@company.com">
+        </div>
+        <div class="mb-3">
+          <label class="form-label small text-secondary">Password</label>
+          <div class="input-group input-group-sm">
+            <input type="password" name="password" id="pwField" class="form-control form-control-sm" required minlength="6" placeholder="Min 6 characters">
+            <button type="button" class="btn btn-outline-secondary" id="pwToggle" tabindex="-1"><i class="bi bi-eye"></i></button>
+          </div>
+        </div>
+        <div class="mb-3">
+          <label class="form-label small text-secondary">Role</label>
+          <select name="role" class="form-select form-select-sm" id="newRole">
+            <option value="viewer">Viewer — read-only access</option>
+            <option value="analyst">Analyst — can import CSVs</option>
+            <option value="admin">Admin — full access</option>
+          </select>
+        </div>
+        <div class="mb-4" id="custPickerWrap">
+          <label class="form-label small text-secondary">Customer Access</label>
+          <div class="border border-secondary rounded p-2" id="custPicker" style="max-height:150px;overflow-y:auto;">
+            <p class="text-secondary small mb-0">Loading…</p>
+          </div>
+          <small class="text-secondary">Admins automatically see all customers.</small>
+        </div>
+        <button type="submit" class="btn btn-primary btn-sm w-100" id="createBtn">
+          <i class="bi bi-person-plus me-1"></i> Create User
+        </button>
+      </form>
+
+      <hr class="border-secondary my-4">
+      <div class="small text-secondary">
+        <p class="mb-1 fw-semibold text-white">Role permissions:</p>
+        <ul class="mb-0 ps-3">
+          <li><strong class="text-white">Viewer</strong> — view dashboards, vulnerabilities, assets</li>
+          <li><strong class="text-white">Analyst</strong> — viewer + import CSV files</li>
+          <li><strong class="text-white">Admin</strong> — analyst + manage users, delete imports</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- User list -->
+  <div class="col-lg-8">
+    <div class="card">
+      <div class="p-3 border-bottom border-secondary d-flex justify-content-between align-items-center">
+        <h6 class="mb-0 text-secondary">All Users</h6>
+        <span class="text-secondary small" id="filterInfo"></span>
+      </div>
+      <div class="table-responsive">
+        <table class="table table-sm table-hover mb-0 align-middle" id="usersTable">
+          <thead>
+            <tr>
+              <th>Username</th>
+              <th>Role</th>
+              <th>Customers</th>
+              <th>Status</th>
+              <th>Last Login</th>
+              <th class="text-end">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="usersBody">
+            <tr><td colspan="6" class="text-center text-secondary py-4">
+              <div class="spinner-border spinner-border-sm me-2"></div>Loading users…
+            </td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Reset Password Modal (shared) -->
+<div class="modal fade" id="resetModal" tabindex="-1">
+  <div class="modal-dialog modal-sm">
+    <div class="modal-content bg-dark border border-secondary">
+      <div class="modal-header border-secondary">
+        <h6 class="modal-title">Reset Password — <span id="resetUsername"></span></h6>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <form id="resetForm">
+        <div class="modal-body">
+          <input type="password" name="new_password" class="form-control form-control-sm"
+                 placeholder="New password (min 6 chars)" minlength="6" required>
+        </div>
+        <div class="modal-footer border-secondary">
+          <button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-sm btn-danger">Reset</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Toast container -->
+<div class="toast-container position-fixed bottom-0 end-0 p-3" id="toastZone" style="z-index:2000;"></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(() => {
+  let USERS = [];
+  let CUSTOMERS = [];
+  let resetUserId = null;
+
+  const $ = sel => document.querySelector(sel);
+  const body = $('#usersBody');
+
+  // ── helpers ────────────────────────────────────────────────────────────────
+  const esc = s => String(s ?? '').replace(/[&<>"']/g,
+      c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+  function toast(msg, ok = true) {
+    const el = document.createElement('div');
+    el.className = `toast align-items-center border-0 text-white ${ok ? 'bg-success' : 'bg-danger'}`;
+    el.innerHTML = `<div class="d-flex">
+        <div class="toast-body"><i class="bi bi-${ok ? 'check-circle' : 'exclamation-triangle'} me-2"></i>${esc(msg)}</div>
+        <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
+      </div>`;
+    $('#toastZone').appendChild(el);
+    const t = new bootstrap.Toast(el, { delay: 3500 });
+    t.show();
+    el.addEventListener('hidden.bs.toast', () => el.remove());
+  }
+
+  async function api(url, opts = {}) {
+    const r = await fetch(url, {
+      method: opts.method || 'POST',
+      headers: { 'X-Requested-With': 'fetch' },
+      body: opts.body || null,
+    });
+    let data = {};
+    try { data = await r.json(); } catch (e) {}
+    if (!r.ok || data.ok === false) throw new Error(data.message || `Request failed (${r.status})`);
+    return data;
+  }
+
+  function upsertUser(u) {
+    const i = USERS.findIndex(x => x.id === u.id);
+    if (i >= 0) USERS[i] = u; else USERS.push(u);
+  }
+
+  // ── rendering ──────────────────────────────────────────────────────────────
+  const roleColor = r => r === 'admin' ? 'danger' : r === 'analyst' ? 'primary' : 'secondary';
+
+  function customerCell(u) {
+    if (u.role === 'admin')
+      return `<span class="badge bg-danger" title="Admins see all customers">All</span>`;
+    const badges = u.customers.map(c => `
+      <span class="badge bg-secondary d-inline-flex align-items-center gap-1 fade-in">
+        ${esc(c.name)}
+        <a href="#" class="text-white text-decoration-none remove-cust" data-uid="${u.id}" data-cid="${c.id}"
+           title="Remove from ${esc(c.name)}" style="font-size:.65rem;line-height:1;">✕</a>
+      </span>`).join(' ');
+    const unassigned = CUSTOMERS.filter(c => !u.customers.some(x => x.id === c.id));
+    const addBtn = unassigned.length ? `
+      <div class="dropdown d-inline-block">
+        <button class="btn btn-outline-secondary btn-sm py-0 px-1 dropdown-toggle" data-bs-toggle="dropdown"
+                title="Assign customer"><i class="bi bi-plus" style="font-size:.75rem;"></i></button>
+        <ul class="dropdown-menu dropdown-menu-dark">
+          ${unassigned.map(c => `<li><a class="dropdown-item small add-cust" href="#"
+              data-uid="${u.id}" data-cid="${c.id}"><i class="bi bi-building me-1"></i>${esc(c.name)}</a></li>`).join('')}
+        </ul>
+      </div>` : '';
+    const none = !u.customers.length ? `<span class="text-warning small me-1">None</span>` : '';
+    return `<div class="d-flex flex-wrap gap-1 align-items-center">${none}${badges} ${addBtn}</div>`;
+  }
+
+  function rowHtml(u) {
+    return `
+      <td>
+        <div class="d-flex align-items-center gap-2">
+          <div class="rounded-circle d-flex align-items-center justify-content-center bg-${roleColor(u.role)}"
+               style="width:28px;height:28px;font-size:.75rem;font-weight:700;flex-shrink:0;">
+            ${esc(u.username[0].toUpperCase())}
+          </div>
+          <div>
+            <span class="text-white">${esc(u.username)}</span>
+            ${u.is_self ? '<span class="badge bg-secondary ms-1">you</span>' : ''}
+            ${u.email ? `<div class="text-secondary" style="font-size:.7rem;">${esc(u.email)}</div>` : ''}
+          </div>
+        </div>
+      </td>
+      <td>
+        <select class="form-select form-select-sm py-0 role-select" style="width:auto;"
+                data-uid="${u.id}" ${u.is_self ? 'disabled' : ''}>
+          ${['viewer','analyst','admin'].map(r =>
+            `<option value="${r}" ${u.role === r ? 'selected' : ''}>${r[0].toUpperCase() + r.slice(1)}</option>`).join('')}
+        </select>
+      </td>
+      <td>${customerCell(u)}</td>
+      <td>
+        <span class="badge ${u.is_active ? 'bg-success' : 'bg-secondary'}">${u.is_active ? 'Active' : 'Inactive'}</span>
+      </td>
+      <td class="text-secondary small">${u.last_login ? esc(u.last_login) : 'Never'}</td>
+      <td class="text-end">
+        <div class="d-flex gap-1 justify-content-end">
+          <button type="button" class="btn btn-outline-secondary btn-sm py-0 reset-pw"
+                  data-uid="${u.id}" title="Reset password"><i class="bi bi-key"></i></button>
+          ${u.is_self ? '' : `
+          <button type="button" class="btn btn-sm py-0 toggle-user ${u.is_active ? 'btn-outline-warning' : 'btn-outline-success'}"
+                  data-uid="${u.id}" title="${u.is_active ? 'Deactivate' : 'Activate'}">
+            <i class="bi bi-${u.is_active ? 'pause' : 'play'}"></i>
+          </button>`}
+        </div>
+      </td>`;
+  }
+
+  function render() {
+    const q = $('#userSearch').value.trim().toLowerCase();
+    const rf = $('#roleFilter').value;
+    const filtered = USERS.filter(u => {
+      if (rf && u.role !== rf) return false;
+      if (!q) return true;
+      return u.username.toLowerCase().includes(q) ||
+             (u.email || '').toLowerCase().includes(q) ||
+             u.customers.some(c => c.name.toLowerCase().includes(q));
+    });
+
+    $('#userCount').textContent = USERS.length;
+    $('#filterInfo').textContent = (q || rf) ? `${filtered.length} of ${USERS.length} shown` : '';
+
+    if (!filtered.length) {
+      body.innerHTML = `<tr><td colspan="6" class="text-center text-secondary py-4">
+        <i class="bi bi-search me-1"></i>No users match.</td></tr>`;
+      return;
+    }
+    body.innerHTML = '';
+    filtered.forEach(u => {
+      const tr = document.createElement('tr');
+      tr.dataset.uid = u.id;
+      tr.innerHTML = rowHtml(u);
+      body.appendChild(tr);
+    });
+  }
+
+  function renderCustPicker() {
+    const wrap = $('#custPicker');
+    if (!CUSTOMERS.length) {
+      wrap.innerHTML = '<p class="text-secondary small mb-0">No customers configured yet.</p>';
+      return;
+    }
+    wrap.innerHTML = CUSTOMERS.map(c => `
+      <div class="form-check form-check-sm mb-1">
+        <input class="form-check-input" type="checkbox" name="customer_ids" value="${c.id}" id="nc_${c.id}">
+        <label class="form-check-label small text-white" for="nc_${c.id}">${esc(c.name)}</label>
+      </div>`).join('');
+  }
+
+  // ── initial load ───────────────────────────────────────────────────────────
+  async function load() {
+    try {
+      const data = await api('/api/admin/users', { method: 'GET' });
+      USERS = data.users;
+      CUSTOMERS = data.customers;
+      render();
+      renderCustPicker();
+    } catch (e) {
+      body.innerHTML = `<tr><td colspan="6" class="text-center text-danger py-4">${esc(e.message)}</td></tr>`;
+    }
+  }
+
+  // ── events (delegated) ─────────────────────────────────────────────────────
+  $('#userSearch').addEventListener('input', render);
+  $('#roleFilter').addEventListener('change', render);
+
+  $('#pwToggle').addEventListener('click', () => {
+    const f = $('#pwField');
+    f.type = f.type === 'password' ? 'text' : 'password';
+    $('#pwToggle').innerHTML = `<i class="bi bi-eye${f.type === 'password' ? '' : '-slash'}"></i>`;
+  });
+
+  // hide customer picker when creating an admin
+  $('#newRole').addEventListener('change', e => {
+    $('#custPickerWrap').style.display = e.target.value === 'admin' ? 'none' : '';
+  });
+
+  $('#addUserForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    const btn = $('#createBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Creating…';
+    try {
+      const data = await api('/admin/users/add', { body: new FormData(e.target) });
+      upsertUser(data.user);
+      render();
+      e.target.reset();
+      $('#custPickerWrap').style.display = '';
+      toast(data.message);
+    } catch (err) {
+      toast(err.message, false);
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = '<i class="bi bi-person-plus me-1"></i> Create User';
+    }
+  });
+
+  body.addEventListener('click', async e => {
+    const add = e.target.closest('.add-cust');
+    const rem = e.target.closest('.remove-cust');
+    const tog = e.target.closest('.toggle-user');
+    const rst = e.target.closest('.reset-pw');
+
+    if (add) {
+      e.preventDefault();
+      const fd = new FormData();
+      fd.append('user_id', add.dataset.uid);
+      try {
+        const data = await api(`/admin/customers/${add.dataset.cid}/users/add`, { body: fd });
+        upsertUser(data.user); render(); toast(data.message);
+      } catch (err) { toast(err.message, false); }
+    }
+
+    if (rem) {
+      e.preventDefault();
+      try {
+        const data = await api(`/admin/customers/${rem.dataset.cid}/users/${rem.dataset.uid}/remove`);
+        upsertUser(data.user); render(); toast(data.message);
+      } catch (err) { toast(err.message, false); }
+    }
+
+    if (tog) {
+      try {
+        const data = await api(`/admin/users/${tog.dataset.uid}/toggle`);
+        upsertUser(data.user); render(); toast(data.message);
+      } catch (err) { toast(err.message, false); }
+    }
+
+    if (rst) {
+      resetUserId = +rst.dataset.uid;
+      const u = USERS.find(x => x.id === resetUserId);
+      $('#resetUsername').textContent = u ? u.username : '';
+      $('#resetForm').reset();
+      new bootstrap.Modal($('#resetModal')).show();
+    }
+  });
+
+  body.addEventListener('change', async e => {
+    const sel = e.target.closest('.role-select');
+    if (!sel) return;
+    const fd = new FormData();
+    fd.append('role', sel.value);
+    try {
+      const data = await api(`/admin/users/${sel.dataset.uid}/role`, { body: fd });
+      upsertUser(data.user); render(); toast(data.message);
+    } catch (err) {
+      toast(err.message, false);
+      render();   // revert the select
+    }
+  });
+
+  $('#resetForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    try {
+      const data = await api(`/admin/users/${resetUserId}/reset`, { body: new FormData(e.target) });
+      toast(data.message);
+      bootstrap.Modal.getInstance($('#resetModal')).hide();
+    } catch (err) { toast(err.message, false); }
+  });
+
+  load();
+})();
+</script>
+<style>
+  .fade-in { animation: fadeIn .25s ease; }
+  @keyframes fadeIn { from { opacity: 0; transform: scale(.92); } to { opacity: 1; transform: scale(1); } }
+  #usersTable tbody tr { transition: background-color .15s ease; }
+</style>
+{% endblock %}

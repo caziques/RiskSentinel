@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Login — Beyond Cyber</title>
+  <link rel="icon" type="image/png" href="{{ url_for('static', filename='favicon.ico') }}">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+  <style>
+    html, body { height: 100%; }
+    body {
+      background: radial-gradient(ellipse 80% 60% at 50% 20%, #1a1320 0%, #0f1117 55%, #090b10 100%);
+      min-height: 100vh;
+      display: flex; align-items: center; justify-content: center;
+      overflow: hidden;
+      position: relative;
+    }
+
+    /* ── ember canvas behind everything ── */
+    #emberCanvas {
+      position: fixed; inset: 0;
+      width: 100vw; height: 100vh;
+      pointer-events: none;
+      z-index: 1;
+    }
+
+    /* ── layout: phoenix above card ── */
+    .login-stage {
+      position: relative; z-index: 2;
+      display: flex; flex-direction: column; align-items: center;
+    }
+
+    /* ── phoenix ── */
+    .phoenix-wrap {
+      width: 260px; height: 190px;
+      margin-bottom: -34px;
+      position: relative;
+      filter: drop-shadow(0 0 18px rgba(255,120,20,.45)) drop-shadow(0 0 40px rgba(255,60,0,.25));
+      animation: hover 4.5s ease-in-out infinite;
+      transition: opacity .5s ease, transform .5s ease;
+    }
+    @keyframes hover {
+      0%, 100% { transform: translateY(0); }
+      50%      { transform: translateY(-9px); }
+    }
+
+    /* wing flapping — rotate around shoulder joints */
+    .wing-left  { transform-origin: 128px 96px; animation: flapL 1.9s ease-in-out infinite; }
+    .wing-right { transform-origin: 132px 96px; animation: flapR 1.9s ease-in-out infinite; }
+    @keyframes flapL {
+      0%, 100% { transform: rotate(6deg)  scaleY(1);    }
+      50%      { transform: rotate(-22deg) scaleY(1.06); }
+    }
+    @keyframes flapR {
+      0%, 100% { transform: rotate(-6deg) scaleY(1);    }
+      50%      { transform: rotate(22deg)  scaleY(1.06); }
+    }
+
+    /* tail streamers sway */
+    .tail-1 { transform-origin: 130px 130px; animation: sway 3.2s ease-in-out infinite; }
+    .tail-2 { transform-origin: 130px 130px; animation: sway 3.2s ease-in-out -0.8s infinite; }
+    .tail-3 { transform-origin: 130px 130px; animation: sway 3.2s ease-in-out -1.6s infinite; }
+    @keyframes sway {
+      0%, 100% { transform: rotate(-4deg); }
+      50%      { transform: rotate(5deg); }
+    }
+
+    /* crest flicker */
+    .crest { transform-origin: 130px 52px; animation: crestFlick 2.4s ease-in-out infinite; }
+    @keyframes crestFlick {
+      0%, 100% { transform: rotate(-3deg) scaleY(1); }
+      50%      { transform: rotate(4deg)  scaleY(1.12); }
+    }
+
+    /* whole-bird flame shimmer */
+    .phoenix-svg { animation: shimmer 2.8s ease-in-out infinite; }
+    @keyframes shimmer {
+      0%, 100% { filter: brightness(1)    saturate(1); }
+      45%      { filter: brightness(1.18) saturate(1.25); }
+      60%      { filter: brightness(.95)  saturate(1.05); }
+    }
+
+    /* rebirth states */
+    .phoenix-wrap.burning {
+      opacity: 0;
+      transform: scale(.25) translateY(30px);
+      transition: opacity .9s ease-in, transform .9s ease-in;
+    }
+    .phoenix-wrap.rising {
+      animation: rise 1.6s cubic-bezier(.2,1.3,.35,1) forwards, hover 4.5s ease-in-out 1.7s infinite;
+    }
+    @keyframes rise {
+      0%   { opacity: 0; transform: translateY(70px) scale(.3); }
+      55%  { opacity: 1; transform: translateY(-14px) scale(1.07); }
+      100% { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    /* flash overlay during rebirth */
+    #flash {
+      position: fixed; inset: 0; z-index: 3; pointer-events: none;
+      background: radial-gradient(circle at 50% 38%, rgba(255,190,80,.55), rgba(255,90,0,.18) 35%, transparent 70%);
+      opacity: 0; transition: opacity .25s ease;
+    }
+    #flash.on { opacity: 1; }
+
+    /* ── login card ── */
+    .login-card {
+      width: 100%; max-width: 400px;
+      background: rgba(22,27,34,.92);
+      backdrop-filter: blur(6px);
+      border: 1px solid #30363d;
+      border-radius: 12px;
+      position: relative; z-index: 2;
+      animation: cardGlow 5s ease-in-out infinite;
+    }
+    @keyframes cardGlow {
+      0%, 100% { box-shadow: 0 10px 40px rgba(0,0,0,.6), 0 0 26px rgba(255,110,20,.07); border-color: #30363d; }
+      50%      { box-shadow: 0 10px 40px rgba(0,0,0,.6), 0 0 44px rgba(255,110,20,.16); border-color: #5a3b28; }
+    }
+
+    .btn-phoenix {
+      background: linear-gradient(135deg, #d2331f, #ff7a18 55%, #ffb347);
+      background-size: 200% 200%;
+      border: none; color: #fff;
+      animation: btnFire 4s ease infinite;
+      transition: transform .15s ease, box-shadow .2s ease;
+    }
+    @keyframes btnFire {
+      0%, 100% { background-position: 0% 50%; }
+      50%      { background-position: 100% 50%; }
+    }
+    .btn-phoenix:hover {
+      color: #fff; transform: translateY(-1px);
+      box-shadow: 0 4px 18px rgba(255,110,20,.4);
+    }
+
+    .form-control:focus, .form-check-input:focus {
+      border-color: #ff7a18 !important;
+      box-shadow: 0 0 0 .2rem rgba(255,122,24,.18) !important;
+    }
+    .form-check-input:checked { background-color: #ff7a18; border-color: #ff7a18; }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation: none !important; transition: none !important; }
+      #emberCanvas { display: none; }
+    }
+  </style>
+</head>
+<body>
+
+<canvas id="emberCanvas"></canvas>
+<div id="flash"></div>
+
+<div class="login-stage">
+
+  <!-- ── Phoenix ─────────────────────────────────────────────────── -->
+  <div class="phoenix-wrap" id="phoenix">
+    <svg class="phoenix-svg" viewBox="0 0 260 190" width="260" height="190" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="fireBody" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%"  stop-color="#ffd966"/>
+          <stop offset="45%" stop-color="#ff8c1a"/>
+          <stop offset="100%" stop-color="#d22f1f"/>
+        </linearGradient>
+        <linearGradient id="fireWingL" x1="1" y1="0" x2="0" y2="1">
+          <stop offset="0%"  stop-color="#ffb347"/>
+          <stop offset="55%" stop-color="#ff6a00"/>
+          <stop offset="100%" stop-color="#b3261e"/>
+        </linearGradient>
+        <linearGradient id="fireWingR" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%"  stop-color="#ffb347"/>
+          <stop offset="55%" stop-color="#ff6a00"/>
+          <stop offset="100%" stop-color="#b3261e"/>
+        </linearGradient>
+        <linearGradient id="fireTail" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%"  stop-color="#ff8c1a"/>
+          <stop offset="60%" stop-color="#e6431f"/>
+          <stop offset="100%" stop-color="#7a1410" stop-opacity=".85"/>
+        </linearGradient>
+        <radialGradient id="glowCore" cx="50%" cy="45%" r="60%">
+          <stop offset="0%"  stop-color="#fff3c4" stop-opacity=".9"/>
+          <stop offset="100%" stop-color="#ffb347" stop-opacity="0"/>
+        </radialGradient>
+        <filter id="soft" x="-30%" y="-30%" width="160%" height="160%">
+          <feGaussianBlur stdDeviation="1.2"/>
+        </filter>
+      </defs>
+
+      <!-- glow core behind body -->
+      <ellipse cx="130" cy="95" rx="55" ry="48" fill="url(#glowCore)"/>
+
+      <!-- tail streamers -->
+      <g filter="url(#soft)">
+        <path class="tail-1" d="M130 128 C 118 150, 104 162, 84 182 C 102 168, 116 158, 126 140 Z" fill="url(#fireTail)"/>
+        <path class="tail-2" d="M130 128 C 130 154, 126 170, 122 188 C 132 168, 136 152, 136 136 Z" fill="url(#fireTail)"/>
+        <path class="tail-3" d="M130 128 C 142 150, 156 164, 178 180 C 158 166, 146 156, 136 140 Z" fill="url(#fireTail)"/>
+      </g>
+
+      <!-- left wing -->
+      <g class="wing-left" filter="url(#soft)">
+        <path d="M128 96
+                 C 100 78, 70 70, 34 78
+                 C 56 84, 66 90, 76 98
+                 C 60 98, 46 102, 30 112
+                 C 52 110, 66 112, 80 118
+                 C 70 124, 62 130, 56 140
+                 C 76 130, 96 124, 118 116
+                 Z" fill="url(#fireWingL)"/>
+        <path d="M128 96 C 106 84, 84 80, 58 84 C 84 88, 104 96, 120 108 Z"
+              fill="#ffd966" opacity=".55"/>
+      </g>
+
+      <!-- right wing -->
+      <g class="wing-right" filter="url(#soft)">
+        <path d="M132 96
+                 C 160 78, 190 70, 226 78
+                 C 204 84, 194 90, 184 98
+                 C 200 98, 214 102, 230 112
+                 C 208 110, 194 112, 180 118
+                 C 190 124, 198 130, 204 140
+                 C 184 130, 164 124, 142 116
+                 Z" fill="url(#fireWingR)"/>
+        <path d="M132 96 C 154 84, 176 80, 202 84 C 176 88, 156 96, 140 108 Z"
+              fill="#ffd966" opacity=".55"/>
+      </g>
+
+      <!-- body -->
+      <path d="M130 60
+               C 142 66, 148 80, 146 98
+               C 144 114, 138 124, 130 130
+               C 122 124, 116 114, 114 98
+               C 112 80, 118 66, 130 60 Z"
+            fill="url(#fireBody)"/>
+      <!-- breast highlight -->
+      <ellipse cx="130" cy="100" rx="9" ry="16" fill="#ffe9a8" opacity=".7"/>
+
+      <!-- head -->
+      <circle cx="130" cy="56" r="11" fill="url(#fireBody)"/>
+      <!-- crest feathers -->
+      <g class="crest">
+        <path d="M127 47 C 124 38, 126 32, 132 26 C 130 34, 131 40, 133 46 Z" fill="#ffb347"/>
+        <path d="M132 46 C 133 36, 138 30, 146 27 C 140 35, 137 41, 136 48 Z" fill="#ff8c1a"/>
+      </g>
+      <!-- beak -->
+      <path d="M139 55 L 150 59 L 139 62 Z" fill="#ffd24d"/>
+      <!-- eye -->
+      <circle cx="134" cy="54" r="2.1" fill="#2b0d05"/>
+      <circle cx="134.8" cy="53.2" r="0.7" fill="#ffe9a8"/>
+    </svg>
+  </div>
+
+  <!-- ── Login card ──────────────────────────────────────────────── -->
+  <div class="login-card p-4 p-md-5 shadow-lg">
+    <div class="text-center mb-4 login-logo">
+      <img src="{{ url_for('static', filename='logo_main.svg') }}" alt="Beyond Cyber" style="height:64px;width:auto;">
+      <h4 class="mt-3 fw-bold text-white">Beyond Cyber</h4>
+      <p class="text-secondary small">Vulnerability Intelligence Platform</p>
+    </div>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% for cat, msg in messages %}
+        <div class="alert alert-{{ cat }} py-2 small">{{ msg }}</div>
+      {% endfor %}
+    {% endwith %}
+
+    <form method="post">
+      <div class="mb-3">
+        <label class="form-label text-secondary small">Username</label>
+        <div class="input-group">
+          <span class="input-group-text bg-dark border-secondary"><i class="bi bi-person text-secondary"></i></span>
+          <input type="text" name="username" class="form-control bg-dark border-secondary text-white"
+                 placeholder="Enter username" autofocus required>
+        </div>
+      </div>
+      <div class="mb-3">
+        <label class="form-label text-secondary small">Password</label>
+        <div class="input-group">
+          <span class="input-group-text bg-dark border-secondary"><i class="bi bi-lock text-secondary"></i></span>
+          <input type="password" name="password" class="form-control bg-dark border-secondary text-white"
+                 placeholder="Enter password" required>
+        </div>
+      </div>
+      <div class="mb-4 form-check">
+        <input type="checkbox" class="form-check-input" name="remember" id="remember">
+        <label class="form-check-label text-secondary small" for="remember">Remember me</label>
+      </div>
+      <button type="submit" class="btn btn-phoenix w-100 fw-semibold">
+        <i class="bi bi-box-arrow-in-right me-1"></i> Sign In
+      </button>
+    </form>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+(() => {
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+
+  const canvas = document.getElementById('emberCanvas');
+  const ctx    = canvas.getContext('2d');
+  const phoenix = document.getElementById('phoenix');
+  const flash   = document.getElementById('flash');
+
+  let W, H;
+  function size() { W = canvas.width = innerWidth; H = canvas.height = innerHeight; }
+  size();
+  addEventListener('resize', size);
+
+  /* phoenix centre in viewport coords */
+  function phoenixCenter() {
+    const r = phoenix.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height * 0.55 };
+  }
+
+  const PALETTE = ['#ffd966', '#ffb347', '#ff8c1a', '#ff6a00', '#e6431f'];
+  const parts = [];
+
+  function spawn(x, y, opts = {}) {
+    parts.push({
+      x, y,
+      vx: (Math.random() - .5) * (opts.spread ?? 0.7),
+      vy: -(Math.random() * (opts.up ?? 1.1) + 0.35),
+      r:  Math.random() * (opts.size ?? 2.4) + 0.8,
+      life: 1,
+      decay: Math.random() * 0.012 + (opts.decay ?? 0.006),
+      color: PALETTE[(Math.random() * PALETTE.length) | 0],
+      wob: Math.random() * Math.PI * 2,
+    });
+  }
+
+  /* ambient embers drifting up from the bottom of the screen */
+  function ambient() {
+    if (Math.random() < 0.35)
+      spawn(Math.random() * W, H + 6, { up: 0.8, size: 1.6, decay: 0.003, spread: 0.4 });
+  }
+
+  /* embers shed by the phoenix (tail + wingtips) */
+  let burning = false;
+  function shed() {
+    if (burning) return;
+    const c = phoenixCenter();
+    for (let i = 0; i < 3; i++) {
+      const ox = (Math.random() - .5) * 130;
+      const oy = (Math.random()) * 60 - 10;
+      spawn(c.x + ox, c.y + oy, { up: 1.3, size: 2.2 });
+    }
+  }
+
+  function burst(n, power) {
+    const c = phoenixCenter();
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const v = Math.random() * power;
+      parts.push({
+        x: c.x, y: c.y,
+        vx: Math.cos(a) * v,
+        vy: Math.sin(a) * v - 1,
+        r: Math.random() * 3 + 1,
+        life: 1,
+        decay: Math.random() * 0.015 + 0.008,
+        color: PALETTE[(Math.random() * PALETTE.length) | 0],
+        wob: Math.random() * Math.PI * 2,
+      });
+    }
+  }
+
+  function tick() {
+    ctx.clearRect(0, 0, W, H);
+    ctx.globalCompositeOperation = 'lighter';
+    ambient();
+    shed();
+
+    for (let i = parts.length - 1; i >= 0; i--) {
+      const p = parts[i];
+      p.wob += 0.08;
+      p.x += p.vx + Math.sin(p.wob) * 0.3;
+      p.y += p.vy;
+      p.vy *= 0.995;
+      p.life -= p.decay;
+      if (p.life <= 0) { parts.splice(i, 1); continue; }
+
+      const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.r * 3);
+      g.addColorStop(0, p.color);
+      g.addColorStop(1, 'transparent');
+      ctx.globalAlpha = p.life;
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r * 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    requestAnimationFrame(tick);
+  }
+  tick();
+
+  /* ── burning day: every ~20s the phoenix combusts and is reborn ── */
+  function burningDay() {
+    burning = true;
+    burst(160, 4.5);                      // combustion
+    flash.classList.add('on');
+    phoenix.classList.add('burning');
+    setTimeout(() => flash.classList.remove('on'), 450);
+
+    setTimeout(() => {                     // ashes settle…
+      phoenix.classList.remove('burning');
+      phoenix.classList.add('rising');     // …and it rises
+      burst(60, 2.2);
+      flash.classList.add('on');
+      setTimeout(() => flash.classList.remove('on'), 350);
+      setTimeout(() => { phoenix.classList.remove('rising'); burning = false; }, 1700);
+    }, 1900);
+  }
+  setInterval(burningDay, 21000);
+
+  /* sign-in: flare on submit */
+  document.querySelector('form').addEventListener('submit', () => {
+    burst(120, 5);
+    flash.classList.add('on');
+  });
+})();
+</script>
+</body>
+</html>

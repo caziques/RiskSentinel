@@ -1,0 +1,159 @@
+{% extends "base.html" %}
+{% block title %}Remediation Projects{% endblock %}
+
+{% block head %}
+<style>
+  .proj-card { transition: transform .15s ease, border-color .15s ease; }
+  .proj-card:hover { transform: translateY(-2px); border-color:#3d8bfd !important; }
+  .prog-track { height:8px; background:#21262d; border-radius:4px; overflow:hidden; }
+  .prog-fill  { height:100%; border-radius:4px; transition: width .8s ease; }
+  .chip { font-size:.7rem; padding:.15rem .45rem; border-radius:4px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-4 flex-wrap gap-2">
+  <div>
+    <h4 class="fw-bold mb-0">Remediation Projects</h4>
+    <small class="text-secondary">
+      Bundles of work grouped by solution, owned and tracked to completion
+    </small>
+  </div>
+  <button class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#newProject">
+    <i class="bi bi-plus-lg me-1"></i> New Project
+  </button>
+</div>
+
+<div class="d-flex gap-2 mb-4">
+  {% for key,label,n in [('','All',counts.all),('open','Open',counts.open),('closed','Closed',counts.closed)] %}
+  <a href="{{ url_for('projects', status=key) }}"
+     class="btn btn-sm {{ 'btn-primary' if status==key else 'btn-outline-secondary' }}">
+    {{ label }} <span class="badge bg-dark ms-1">{{ n }}</span>
+  </a>
+  {% endfor %}
+  {% if counts.expired %}
+  <span class="btn btn-sm btn-outline-danger disabled">
+    Expired <span class="badge bg-dark ms-1">{{ counts.expired }}</span>
+  </span>
+  {% endif %}
+</div>
+
+{% if not cards %}
+<div class="card p-5 text-center">
+  <i class="bi bi-clipboard-check fs-1 text-secondary mb-3"></i>
+  <h6 class="text-white">No remediation projects yet</h6>
+  <p class="text-secondary mb-3">
+    Create one from the Remediation page by selecting the solutions you want to tackle,
+    or start an empty project here and add solutions to it.
+  </p>
+  <div>
+    <a href="{{ url_for('remediation') }}" class="btn btn-sm btn-outline-primary me-2">
+      Go to Remediation
+    </a>
+    <button class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#newProject">
+      New Project
+    </button>
+  </div>
+</div>
+{% else %}
+<div class="row g-3">
+  {% for c in cards %}
+  {% set p = c.p %}{% set g = c.prog %}
+  <div class="col-12 col-md-6 col-xl-4">
+    <a href="{{ url_for('project_detail', project_id=p.id) }}" class="text-decoration-none">
+      <div class="card proj-card h-100 p-3">
+        <div class="d-flex justify-content-between align-items-start mb-2">
+          <h6 class="text-white mb-0 text-truncate" style="max-width:74%;">{{ p.name }}</h6>
+          {% set ds = p.display_status %}
+          <span class="chip {{ 'bg-success' if ds=='Open' else 'bg-danger' if ds=='Expired' else 'bg-secondary' }}">
+            {{ ds }}
+          </span>
+        </div>
+
+        {% if p.description %}
+        <p class="text-secondary small mb-2 text-truncate">{{ p.description }}</p>
+        {% endif %}
+
+        <div class="d-flex justify-content-between small text-secondary mb-1">
+          <span>{{ g.done }} of {{ g.total }} solutions resolved</span>
+          <span class="text-white fw-semibold">{{ g.pct }}%</span>
+        </div>
+        <div class="prog-track mb-2">
+          <div class="prog-fill" style="width:{{ g.pct }}%;
+               background:{{ '#3fb950' if g.pct==100 else '#1f6feb' }};"></div>
+        </div>
+
+        <div class="d-flex flex-wrap gap-2 small text-secondary mb-2">
+          <span><i class="bi bi-hdd-network me-1"></i>{{ '{:,}'.format(g.hosts) }} hosts</span>
+          <span><i class="bi bi-bug me-1"></i>{{ '{:,}'.format(g.findings) }} findings</span>
+          {% if g.awaiting %}<span class="text-warning">{{ g.awaiting }} awaiting</span>{% endif %}
+          {% if g.disputed %}
+          <span class="text-danger" title="Marked Closed but the scanner still sees them">
+            <i class="bi bi-exclamation-triangle me-1"></i>{{ g.disputed }} disputed
+          </span>
+          {% endif %}
+        </div>
+
+        <div class="d-flex justify-content-between small text-secondary mt-auto pt-2"
+             style="border-top:1px solid #21262d;">
+          <span>{% if p.owner %}<i class="bi bi-person me-1"></i>{{ p.owner.username }}{% else %}Unassigned{% endif %}</span>
+          <span>
+            {% if p.due_date %}
+              <i class="bi bi-calendar-event me-1"></i>
+              <span class="{{ 'text-danger fw-semibold' if p.is_expired }}">{{ p.due_date }}</span>
+            {% else %}No due date{% endif %}
+          </span>
+        </div>
+      </div>
+    </a>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+<!-- New project modal -->
+<div class="modal fade" id="newProject" tabindex="-1">
+  <div class="modal-dialog">
+    <form method="post" action="{{ url_for('project_create') }}">
+      <div class="modal-content bg-dark text-white border-secondary">
+        <div class="modal-header border-secondary">
+          <h6 class="modal-title"><i class="bi bi-clipboard-plus me-2"></i>New Remediation Project</h6>
+          <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <div class="mb-3">
+            <label class="form-label text-secondary small">Project name <span class="text-danger">*</span></label>
+            <input name="name" required class="form-control bg-dark border-secondary text-white"
+                   placeholder="e.g. Q4 critical patching">
+          </div>
+          <div class="mb-3">
+            <label class="form-label text-secondary small">Description</label>
+            <textarea name="description" rows="2"
+                      class="form-control bg-dark border-secondary text-white"></textarea>
+          </div>
+          <div class="row g-2">
+            <div class="col-6">
+              <label class="form-label text-secondary small">Due date</label>
+              <input type="date" name="due_date" class="form-control bg-dark border-secondary text-white">
+            </div>
+            <div class="col-6">
+              <label class="form-label text-secondary small">Scope</label>
+              <select name="project_type" class="form-select bg-dark border-secondary text-white">
+                <option value="static">Static, fixed at creation</option>
+                <option value="dynamic">Dynamic, absorbs new findings</option>
+              </select>
+            </div>
+          </div>
+          <p class="text-secondary small mt-3 mb-0">
+            Solutions are added from the Remediation page, or from inside the project once created.
+          </p>
+        </div>
+        <div class="modal-footer border-secondary">
+          <button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-sm btn-primary">Create Project</button>
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

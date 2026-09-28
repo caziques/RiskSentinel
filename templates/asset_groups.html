@@ -1,0 +1,120 @@
+{% extends 'base.html' %}
+{% block title %}Asset Groups{% endblock %}
+
+{% block head %}
+<style>
+  .group-color-dot { display:inline-block; width:12px; height:12px; border-radius:50%; flex-shrink:0; }
+</style>
+{% endblock %}
+
+{% block topbar_left %}
+<h6 class="mb-0 fw-semibold"><i class="bi bi-collection me-2 text-primary"></i>Asset Groups</h6>
+{% endblock %}
+
+{% block content %}
+
+<div class="d-flex align-items-center justify-content-between mb-4">
+  <div>
+    <p class="text-secondary mb-0">Group assets for bulk operations, risk acceptance, and reporting.</p>
+  </div>
+  {% if current_user.role in ('admin','analyst') %}
+  <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#createGroupModal">
+    <i class="bi bi-plus-circle me-1"></i>New Group
+  </button>
+  {% endif %}
+</div>
+
+{% if groups %}
+<div class="row g-3">
+  {% for g in groups %}
+  <div class="col-md-6 col-xl-4">
+    <div class="card h-100" style="border-left:3px solid {{ g.color }};">
+      <div class="card-body">
+        <div class="d-flex align-items-start justify-content-between mb-2">
+          <div class="d-flex align-items-center gap-2">
+            <span class="group-color-dot" style="background:{{ g.color }};"></span>
+            <a href="{{ url_for('asset_group_detail', group_id=g.id) }}"
+               class="text-white fw-semibold text-decoration-none fs-6">{{ g.name }}</a>
+          </div>
+          <span class="badge bg-secondary">{{ g._member_count }} asset{% if g._member_count != 1 %}s{% endif %}</span>
+        </div>
+        {% if g.description %}
+          <p class="text-secondary small mb-2">{{ g.description }}</p>
+        {% endif %}
+        <div class="text-secondary" style="font-size:.75rem;">
+          Created {{ g.created_at.strftime('%Y-%m-%d') }}
+          {% if g.created_by %} by {{ g.created_by.username }}{% endif %}
+        </div>
+      </div>
+      <div class="card-footer border-secondary py-2 d-flex gap-2">
+        <a href="{{ url_for('asset_group_detail', group_id=g.id) }}"
+           class="btn btn-outline-secondary btn-sm flex-grow-1">
+          <i class="bi bi-pencil me-1"></i>Manage
+        </a>
+        <a href="{{ url_for('risk_acceptance') }}?add=1&scope=group&group_id={{ g.id }}"
+           class="btn btn-outline-success btn-sm" title="Accept risk for whole group">
+          <i class="bi bi-shield-check"></i>
+        </a>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="card">
+  <div class="text-center py-5 text-secondary">
+    <i class="bi bi-collection" style="font-size:3rem;opacity:.3;"></i>
+    <p class="mt-2">No asset groups yet.</p>
+    {% if current_user.role in ('admin','analyst') %}
+    <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#createGroupModal">
+      <i class="bi bi-plus-circle me-1"></i>Create First Group
+    </button>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+
+
+<!-- ── Create Group Modal ──────────────────────────────────────────────────── -->
+{% if current_user.role in ('admin','analyst') %}
+<div class="modal fade" id="createGroupModal" tabindex="-1" data-bs-backdrop="static">
+  <div class="modal-dialog">
+    <div class="modal-content" style="background:#161b22;border:1px solid #30363d;">
+      <form method="post" action="{{ url_for('asset_group_create') }}">
+        <div class="modal-header border-secondary">
+          <h5 class="modal-title"><i class="bi bi-collection me-2 text-primary"></i>New Asset Group</h5>
+          <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <div class="mb-3">
+            <label class="form-label text-secondary small">Group Name <span class="text-danger">*</span></label>
+            <input type="text" name="name" class="form-control bg-dark border-secondary text-white"
+                   placeholder="e.g. Production Servers, DMZ, PCI Scope" required autofocus>
+          </div>
+          <div class="mb-3">
+            <label class="form-label text-secondary small">Description <span class="text-muted">(optional)</span></label>
+            <textarea name="description" rows="2" class="form-control bg-dark border-secondary text-white"
+                      placeholder="Brief description of this group's purpose…"></textarea>
+          </div>
+          <div class="mb-3">
+            <label class="form-label text-secondary small">Colour</label>
+            <div class="d-flex align-items-center gap-3">
+              <input type="color" name="color" value="#1f6feb"
+                     class="form-control form-control-color border-secondary" style="width:48px;height:38px;">
+              <span class="text-secondary small">Used for visual grouping in the UI.</span>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer border-secondary">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-primary">
+            <i class="bi bi-check2 me-1"></i>Create Group
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{% endblock %}

@@ -1,0 +1,46 @@
+# ── Secrets. Never commit these. ─────────────────────────────────────────────
+# .env.example IS committed, as the template; every real one is excluded.
+.env
+.env.*
+!.env.example
+
+# ── Customer data ────────────────────────────────────────────────────────────
+instance/
+uploads/
+backups/
+reports/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# Scan exports and raw imports
+*.csv
+*.tsv
+!sample*.csv
+
+# ── Python ───────────────────────────────────────────────────────────────────
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# ── Build and archive artefacts ──────────────────────────────────────────────
+*.tar.gz
+*.zip
+*.log
+
+# ── OS and editors ───────────────────────────────────────────────────────────
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# ── Not part of this project ─────────────────────────────────────────────────
+# Vendored third-party tool, 57 MB
+spiderfoot/
+# Stray scp artefact: the filename is the destination host
+beyondcyber@*

@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% block title %}Assets{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-4">
+  <div>
+    <h4 class="fw-bold mb-0">Assets</h4>
+    <small class="text-secondary">{{ assets|length }} assets · ranked by risk score</small>
+  </div>
+</div>
+
+<div class="card p-3 mb-4">
+  <form method="get" class="row g-2 align-items-end">
+    <div class="col-md-4">
+      <label class="form-label small text-secondary mb-1">Search Asset / IP</label>
+      <input type="text" name="search" class="form-control form-control-sm" placeholder="Hostname or IP…" value="{{ search }}">
+    </div>
+    <div class="col-md-3">
+      <label class="form-label small text-secondary mb-1">Scan Import</label>
+      <select name="import_id" class="form-select form-select-sm">
+        {% for imp in all_imports %}
+        <option value="{{ imp.id }}" {% if current_import_id == imp.id %}selected{% endif %}>
+          {{ imp.report_date or imp.imported_at.strftime('%Y-%m-%d') }} ({{ imp.record_count }})
+        </option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-auto">
+      <button type="submit" class="btn btn-sm btn-primary">Filter</button>
+    </div>
+  </form>
+</div>
+
+<div class="card">
+  <div class="table-responsive">
+    <table id="assetTable" class="table table-hover table-sm mb-0" style="width:100%">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Asset</th>
+          <th>IP Address</th>
+          <th class="text-danger">Critical</th>
+          <th class="text-warning">High</th>
+          <th class="text-info">Medium</th>
+          <th class="text-success">Low</th>
+          <th>Info</th>
+          <th>Total</th>
+          <th>Groups</th>
+          <th>Risk Score</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% set max_score = assets[0].risk_score if assets else 1 %}
+      {% for a in assets %}
+      <tr>
+        <td class="text-secondary small">{{ loop.index }}</td>
+        <td>
+          <a href="{{ url_for('asset_detail', asset_name=a.asset) }}?import_id={{ current_import_id }}"
+             class="text-white text-decoration-none fw-semibold">{{ a.asset }}</a>
+        </td>
+        <td class="text-secondary small">{{ a.ip_address }}</td>
+        <td>
+          {% if a.critical > 0 %}<span class="badge sev-badge-Critical">{{ a.critical }}</span>
+          {% else %}<span class="text-secondary">0</span>{% endif %}
+        </td>
+        <td>
+          {% if a.high > 0 %}<span class="badge sev-badge-High">{{ a.high }}</span>
+          {% else %}<span class="text-secondary">0</span>{% endif %}
+        </td>
+        <td>
+          {% if a.medium > 0 %}<span class="badge sev-badge-Medium">{{ a.medium }}</span>
+          {% else %}<span class="text-secondary">0</span>{% endif %}
+        </td>
+        <td>
+          {% if a.low > 0 %}<span class="badge sev-badge-Low">{{ a.low }}</span>
+          {% else %}<span class="text-secondary">0</span>{% endif %}
+        </td>
+        <td class="text-secondary small">{{ a.info }}</td>
+        <td class="text-white">{{ a.total }}</td>
+        <td>
+          {% for g in asset_group_map.get(a.asset, []) %}
+            <a href="{{ url_for('asset_group_detail', group_id=g.id) }}"
+               class="badge text-decoration-none me-1"
+               style="background:{{ g.color }}22;border:1px solid {{ g.color }}66;color:{{ g.color }};">{{ g.name }}</a>
+          {% endfor %}
+        </td>
+        <td style="min-width:140px;">
+          <div class="d-flex align-items-center gap-2">
+            <div class="progress flex-grow-1" style="height:8px;">
+              <div class="progress-bar bg-danger" style="width:{{ ((a.risk_score or 0) / (max_score or 1) * 100)|int }}%"></div>
+            </div>
+            <span class="text-white fw-semibold" style="min-width:32px;text-align:right;">{{ a.risk_score or 0 }}</span>
+          </div>
+        </td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+$(document).ready(function() {
+  $('#assetTable').DataTable({
+    order: [[10, 'desc']],
+    pageLength: 50,
+    columnDefs: [{ orderable: false, targets: [9, 10] }]
+  });
+});
+</script>
+{% endblock %}

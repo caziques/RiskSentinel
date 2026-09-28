@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# Local data (mounted as volumes in prod)
+instance/
+uploads/
+
+# Dev / IDE
+.env
+.env.*
+*.swp
+*.swo
+.DS_Store
+.idea/
+.vscode/
+
+# Git
+.git/
+.gitignore

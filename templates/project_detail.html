@@ -1,0 +1,267 @@
+{% extends "base.html" %}
+{% block title %}{{ p.name }}{% endblock %}
+
+{% block head %}
+<style>
+  .prog-track { height:10px; background:#21262d; border-radius:5px; overflow:hidden; }
+  .prog-fill  { height:100%; border-radius:5px; transition: width .8s ease; }
+  .st-Open                   { background:#6e7681 !important; }
+  .st-AwaitingVerification   { background:#d29922 !important; color:#000 !important; }
+  .st-WillNotFix             { background:#8957e5 !important; }
+  .st-Closed                 { background:#238636 !important; }
+  .item-row td { vertical-align: middle; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-start justify-content-between mb-3 flex-wrap gap-2">
+  <div>
+    <div class="d-flex align-items-center gap-2 mb-1">
+      <a href="{{ url_for('projects') }}" class="text-secondary text-decoration-none small">
+        <i class="bi bi-arrow-left"></i> Projects
+      </a>
+      {% set ds = p.display_status %}
+      <span class="badge {{ 'bg-success' if ds=='Open' else 'bg-danger' if ds=='Expired' else 'bg-secondary' }}">{{ ds }}</span>
+      <span class="badge bg-dark border border-secondary">{{ p.project_type|title }}</span>
+    </div>
+    <h4 class="fw-bold mb-0">{{ p.name }}</h4>
+    {% if p.description %}<small class="text-secondary">{{ p.description }}</small>{% endif %}
+  </div>
+  <div class="d-flex gap-2">
+    <a href="{{ url_for('project_export_csv', project_id=p.id) }}"
+       class="btn btn-sm btn-outline-success"><i class="bi bi-file-earmark-spreadsheet me-1"></i>CSV</a>
+    <form method="post" action="{{ url_for('project_close', project_id=p.id) }}" class="d-inline">
+      <button class="btn btn-sm {{ 'btn-outline-warning' if p.status=='Open' else 'btn-outline-success' }}">
+        {{ 'Close Project' if p.status=='Open' else 'Reopen' }}
+      </button>
+    </form>
+    {% if current_user.role == 'admin' %}
+    <form method="post" action="{{ url_for('project_delete', project_id=p.id) }}" class="d-inline"
+          onsubmit="return confirm('Delete this project permanently?');">
+      <button class="btn btn-sm btn-outline-danger"><i class="bi bi-trash"></i></button>
+    </form>
+    {% endif %}
+  </div>
+</div>
+
+{% if p.is_expired %}
+<div class="alert d-flex align-items-center gap-2 mb-4"
+     style="background:#2a1416;border:1px solid #6a2a2a;color:#f78166;">
+  <i class="bi bi-calendar-x"></i>
+  <div class="small">Past its due date of <strong>{{ p.due_date }}</strong> with
+    {{ prog.open }} solution{{ 's' if prog.open != 1 }} still outstanding.</div>
+</div>
+{% endif %}
+
+{% if verifiable %}
+<div class="alert d-flex align-items-center justify-content-between gap-3 mb-4"
+     style="background:#11261a;border:1px solid #2ea043;color:#7ee787;">
+  <div class="d-flex align-items-start gap-2">
+    <i class="bi bi-check2-circle mt-1"></i>
+    <div class="small">
+      <strong>{{ verifiable|length }} solution{{ 's' if verifiable|length != 1 }}
+        no longer detected</strong> in the latest scan
+      {% if latest %}({{ latest.filename }}){% endif %}, but still marked as outstanding.
+      <div class="text-secondary" style="font-size:.75rem;">
+        Closing records who signed it off and adds a note. Absence from one scan is
+        strong evidence but not proof, so this is not applied automatically.
+      </div>
+    </div>
+  </div>
+  <form method="post" action="{{ url_for('project_close_verified', project_id=p.id) }}">
+    <button class="btn btn-sm btn-success text-nowrap">
+      Close {{ verifiable|length }} verified
+    </button>
+  </form>
+</div>
+{% endif %}
+
+{% if prog.disputed %}
+<div class="alert d-flex align-items-start gap-2 mb-4"
+     style="background:#2a2410;border:1px solid #6a5a20;color:#e3c766;">
+  <i class="bi bi-exclamation-triangle mt-1"></i>
+  <div class="small">
+    <strong>{{ prog.disputed }} solution{{ 's' if prog.disputed != 1 }} marked Closed but still detected</strong>
+    in the latest scan. Either the fix did not take, or it has not been rescanned yet.
+  </div>
+</div>
+{% endif %}
+
+<div class="row g-3 mb-4">
+  <div class="col-6 col-lg-3">
+    <div class="card p-3 h-100">
+      <div class="text-secondary small mb-1">Solutions Resolved</div>
+      <div class="fs-3 fw-bold text-white">{{ prog.done }}<span class="fs-6 text-secondary">/{{ prog.total }}</span></div>
+      <div class="prog-track mt-2">
+        <div class="prog-fill" style="width:{{ prog.pct }}%;background:{{ '#3fb950' if prog.pct==100 else '#1f6feb' }};"></div>
+      </div>
+      <div class="text-secondary mt-1" style="font-size:.7rem;">{{ prog.pct }}% by owner action</div>
+    </div>
+  </div>
+  <div class="col-6 col-lg-3">
+    <div class="card p-3 h-100">
+      <div class="text-secondary small mb-1">Scanner Verified</div>
+      <div class="fs-3 fw-bold" style="color:#3fb950;">{{ prog.verified }}<span class="fs-6 text-secondary">/{{ prog.total }}</span></div>
+      <div class="prog-track mt-2">
+        <div class="prog-fill" style="width:{{ prog.verified_pct }}%;background:#3fb950;"></div>
+      </div>
+      <div class="text-secondary mt-1" style="font-size:.7rem;">no longer seen in the latest scan</div>
+    </div>
+  </div>
+  <div class="col-6 col-lg-3">
+    <div class="card p-3 h-100">
+      <div class="text-secondary small mb-1">Hosts in Scope</div>
+      <div class="fs-3 fw-bold text-white">{{ '{:,}'.format(prog.hosts) }}</div>
+      <div class="text-secondary" style="font-size:.7rem;">{{ '{:,}'.format(prog.findings) }} findings at scoping</div>
+    </div>
+  </div>
+  <div class="col-6 col-lg-3">
+    <div class="card p-3 h-100">
+      <div class="text-secondary small mb-1">Owner / Due</div>
+      <div class="fs-5 fw-bold text-white">{{ p.owner.username if p.owner else 'Unassigned' }}</div>
+      <div class="text-secondary" style="font-size:.75rem;">
+        {% if p.due_date %}<span class="{{ 'text-danger' if p.is_expired }}">{{ p.due_date }}</span>{% else %}No due date{% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+
+{% if trend_points > 1 %}
+<div class="card p-3 mb-4">
+  <div class="d-flex justify-content-between align-items-center mb-2">
+    <h6 class="mb-0">Progress Over Time</h6>
+    <small class="text-secondary">One point per scan since the project was created</small>
+  </div>
+  <canvas id="burndown" height="150"></canvas>
+</div>
+{% elif trend_points == 1 %}
+<div class="card p-3 mb-4">
+  <div class="d-flex align-items-center gap-2 text-secondary small">
+    <i class="bi bi-graph-up"></i>
+    Progress is recorded against each scan. A trend line appears here once a
+    second scan has been imported.
+  </div>
+</div>
+{% endif %}
+
+<div class="card">
+  <div class="d-flex justify-content-between align-items-center p-3 pb-2">
+    <h6 class="mb-0">Solutions <span class="badge bg-secondary ms-1">{{ items|length }}</span></h6>
+    <a href="{{ url_for('remediation') }}" class="btn btn-sm btn-outline-secondary">
+      <i class="bi bi-plus-lg me-1"></i>Add from Remediation
+    </a>
+  </div>
+  <div class="table-responsive">
+    <table class="table table-hover table-sm mb-0">
+      <thead>
+        <tr>
+          <th>Severity</th>
+          <th>Solution</th>
+          <th class="text-end">CVSS</th>
+          <th class="text-end">Hosts</th>
+          <th class="text-end">Still present</th>
+          <th>Status</th>
+          <th>Assignee</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for i in items %}
+        {% set present = live.get(i.plugin_id, 0) %}
+        <tr class="item-row">
+          <td><span class="badge sev-badge-{{ i.risk_factor }}">{{ i.risk_factor or '—' }}</span></td>
+          <td class="small" style="max-width:340px;">
+            <div class="text-white text-truncate" title="{{ i.plugin_name }}">{{ i.plugin_name or i.plugin_id }}</div>
+            {% if i.notes %}<div class="text-secondary text-truncate" style="font-size:.72rem;">{{ i.notes }}</div>{% endif %}
+          </td>
+          <td class="text-end small">{{ i.cvss_score if i.cvss_score is not none else '—' }}</td>
+          <td class="text-end small text-secondary">{{ '{:,}'.format(i.host_count or 0) }}</td>
+          <td class="text-end small">
+            {% if present %}
+              <span class="{{ 'text-danger fw-semibold' if i.status == 'Closed' else 'text-secondary' }}">{{ '{:,}'.format(present) }}</span>
+            {% else %}
+              <span class="text-success"><i class="bi bi-check-circle"></i> 0</span>
+            {% endif %}
+          </td>
+          <td>
+            <form method="post" action="{{ url_for('project_item_update', project_id=p.id, item_id=i.id) }}">
+              <select name="status" onchange="this.form.submit()"
+                      class="form-select form-select-sm bg-dark border-secondary text-white"
+                      style="width:auto;min-width:150px;">
+                {% for s in statuses %}
+                <option value="{{ s }}" {% if i.status==s %}selected{% endif %}>{{ s }}</option>
+                {% endfor %}
+              </select>
+            </form>
+          </td>
+          <td>
+            <form method="post" action="{{ url_for('project_item_update', project_id=p.id, item_id=i.id) }}">
+              <select name="assignee_id" onchange="this.form.submit()"
+                      class="form-select form-select-sm bg-dark border-secondary text-white"
+                      style="width:auto;min-width:130px;">
+                <option value="">Unassigned</option>
+                {% for u in users %}
+                <option value="{{ u.id }}" {% if i.assignee_id==u.id %}selected{% endif %}>{{ u.username }}</option>
+                {% endfor %}
+              </select>
+            </form>
+          </td>
+          <td class="text-end">
+            <form method="post" action="{{ url_for('project_item_remove', project_id=p.id, item_id=i.id) }}"
+                  onsubmit="return confirm('Remove this solution from the project?');">
+              <button class="btn btn-sm btn-outline-secondary py-0"><i class="bi bi-x"></i></button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+        {% if not items %}
+        <tr><td colspan="8" class="text-center text-secondary py-4">
+          No solutions yet. Add them from the
+          <a href="{{ url_for('remediation') }}">Remediation</a> page.
+        </td></tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% if trend_points > 1 %}
+<script>
+(function () {
+  const t = {{ trend_json|safe }};
+  const ctx = document.getElementById('burndown');
+  if (!ctx || !window.Chart) return;
+  new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: t.map(d => d.date),
+      datasets: [
+        { label: 'Resolved by owner %', data: t.map(d => d.pct),
+          borderColor: '#1f6feb', backgroundColor: 'rgba(31,111,235,.12)',
+          fill: true, tension: .3, yAxisID: 'y' },
+        { label: 'Scanner verified %', data: t.map(d => d.verified_pct),
+          borderColor: '#3fb950', backgroundColor: 'rgba(63,185,80,.10)',
+          fill: true, tension: .3, yAxisID: 'y' },
+        { label: 'Findings still open', data: t.map(d => d.findings),
+          borderColor: '#d29922', borderDash: [5,4], fill: false,
+          tension: .3, yAxisID: 'y1' }
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: { legend: { labels: { color: '#8b949e', boxWidth: 12 } } },
+      scales: {
+        y:  { min: 0, max: 100, ticks: { color: '#8b949e', callback: v => v + '%' },
+              grid: { color: '#21262d' } },
+        y1: { position: 'right', min: 0, ticks: { color: '#d29922' },
+              grid: { drawOnChartArea: false } },
+        x:  { ticks: { color: '#8b949e' }, grid: { color: '#21262d' } }
+      }
+    }
+  });
+})();
+</script>
+{% endif %}
+
+{% endblock %}

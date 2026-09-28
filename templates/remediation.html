@@ -1,0 +1,600 @@
+{% extends "base.html" %}
+{% block title %}Remediation Priority{% endblock %}
+
+{% block head %}
+<style>
+  .quadrant-label {
+    position: absolute; font-size: .7rem; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .06em; opacity: .55;
+    pointer-events: none;
+  }
+  .sla-breach td { border-left: 3px solid #da3633 !important; }
+  .effort-single  { background:#23863622; color:#3fb950; border:1px solid #23863655; }
+  .effort-few     { background:#d2992222; color:#d29922; border:1px solid #d2992255; }
+  .effort-orgwide { background:#da363322; color:#f78166; border:1px solid #da363355; }
+  .sol-card { border:1px solid #30363d; border-radius:8px; padding:1rem; background:#161b22;
+              transition:border-color .15s; cursor:default; }
+  .sol-card:hover { border-color:#1f6feb; }
+  .rank-chip { width:32px; height:32px; border-radius:50%; display:flex; align-items:center;
+               justify-content:center; font-size:.75rem; font-weight:700; flex-shrink:0; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-4">
+  <div>
+    <h4 class="fw-bold mb-0">Remediation Priority Engine</h4>
+    <small class="text-secondary">
+      Ranked by risk impact · Total risk score <strong class="text-white">{{ '{:,}'.format(total_risk) }}</strong>
+      {% if not include_info and info_count %}
+      · <span class="text-secondary">{{ '{:,}'.format(info_count) }} informational items hidden</span>
+      {% endif %}
+    </small>
+  </div>
+  <div class="d-flex gap-2 align-items-center flex-wrap">
+    <select class="form-select form-select-sm" style="width:auto;"
+            onchange="applyFilter('import_id', this.value)">
+      {% for imp in all_imports %}
+      <option value="{{ imp.id }}" {% if current_import_id == imp.id %}selected{% endif %}>
+        {{ imp.report_date or imp.imported_at.strftime('%Y-%m-%d') }}
+      </option>
+      {% endfor %}
+    </select>
+    <div class="btn-group btn-group-sm">
+      <a href="?import_id={{ current_import_id }}&include_info={{ '0' if include_info else '1' }}&include_suppressed={{ '1' if include_suppressed else '0' }}"
+         class="btn {% if include_info %}btn-secondary{% else %}btn-outline-secondary{% endif %}">
+        {% if include_info %}<i class="bi bi-eye-slash me-1"></i>Hide Info{% else %}<i class="bi bi-eye me-1"></i>Show Info ({{ '{:,}'.format(info_count) }}){% endif %}
+      </a>
+    </div>
+  </div>
+</div>
+
+{% if not rows %}
+<div class="text-center py-5">
+  <i class="bi bi-check2-circle text-success" style="font-size:4rem;"></i>
+  <h5 class="mt-3 text-white">No actionable findings</h5>
+  <p class="text-secondary">All non-informational vulnerabilities are suppressed or resolved.</p>
+  <a href="?import_id={{ current_import_id }}&include_info=1" class="btn btn-outline-secondary btn-sm">Show informational items</a>
+</div>
+{% else %}
+
+<!-- ── KPI Row ─────────────────────────────────────────────────────────────── -->
+<div class="row g-3 mb-4">
+  <div class="col-6 col-md-4 col-lg">
+    <div class="card p-3 text-center h-100">
+      <div class="text-secondary small mb-1">Actionable Plugins</div>
+      <div class="display-5 fw-bold text-white">{{ '{:,}'.format(total_plugins) }}</div>
+      <div class="text-secondary" style="font-size:.72rem;">{{ with_solution }} have a fix</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-4 col-lg">
+    <div class="card p-3 text-center h-100" style="border-color:#da3633;">
+      <div class="text-secondary small mb-1">Critical + High</div>
+      <div class="display-5 fw-bold" style="color:#da3633;">{{ '{:,}'.format(ch_count) }}</div>
+      <div class="text-secondary" style="font-size:.72rem;">immediate action</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-4 col-lg">
+    <div class="card p-3 text-center h-100" style="{% if sla_breaches %}border-color:#da3633;{% endif %}">
+      <div class="text-secondary small mb-1">SLA Breaches</div>
+      <div class="display-5 fw-bold {% if sla_breaches %}text-danger{% else %}text-success{% endif %}">{{ '{:,}'.format(sla_breaches) }}</div>
+      <div class="text-secondary" style="font-size:.72rem;">past due date</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-4 col-lg">
+    <div class="card p-3 text-center h-100" style="border-color:#1f6feb;">
+      <div class="text-secondary small mb-1">Fix Top 10</div>
+      <div class="display-5 fw-bold" style="color:#1f6feb;">{{ top10_pct }}%</div>
+      <div class="text-secondary" style="font-size:.72rem;">risk eliminated</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-4 col-lg">
+    <div class="card p-3 text-center h-100" style="border-color:#238636;">
+      <div class="text-secondary small mb-1">Fix Top 20</div>
+      <div class="display-5 fw-bold" style="color:#238636;">{{ top20_pct }}%</div>
+      <div class="text-secondary" style="font-size:.72rem;">risk eliminated</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-4 col-lg">
+    <div class="card p-3 text-center h-100">
+      <div class="text-secondary small mb-1">Total Risk Score</div>
+      <div class="display-5 fw-bold text-white">{{ '{:,}'.format(total_risk) }}</div>
+      <div class="text-secondary" style="font-size:.72rem;">CVSS × host count</div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Charts Row ──────────────────────────────────────────────────────────── -->
+<div class="row g-4 mb-4">
+
+  <!-- Cumulative risk reduction -->
+  <div class="col-lg-5">
+    <div class="card p-3 h-100">
+      <h6 class="text-secondary mb-1">Cumulative Risk Reduction</h6>
+      <p class="text-secondary mb-3" style="font-size:.78rem;">
+        How much total risk is eliminated as you fix ranked plugins in order.
+      </p>
+      <canvas id="cumulChart" height="220"></canvas>
+    </div>
+  </div>
+
+  <!-- Scatter: effort vs impact -->
+  <div class="col-lg-7">
+    <div class="card p-3 h-100">
+      <h6 class="text-secondary mb-1">Effort vs Impact <small class="fw-normal">(click bubble → plugin detail)</small></h6>
+      <p class="text-secondary mb-2" style="font-size:.78rem;">
+        X = hosts affected (effort) · Y = CVSS / severity score (impact) · Size = finding count
+      </p>
+      <div style="position:relative;">
+        <canvas id="scatterChart" height="240" style="cursor:pointer;"></canvas>
+        <span class="quadrant-label" style="top:8px;left:55%;">Org-Wide Priority →</span>
+        <span class="quadrant-label" style="top:8px;left:8%;">Quick Wins</span>
+        <span class="quadrant-label" style="bottom:28px;left:55%;opacity:.3;">Low Priority Wide</span>
+        <span class="quadrant-label" style="bottom:28px;left:8%;opacity:.3;">Low Priority</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Secondary charts ────────────────────────────────────────────────────── -->
+<div class="row g-4 mb-4">
+  <div class="col-md-4">
+    <div class="card p-3 h-100">
+      <h6 class="text-secondary mb-3">Vulnerability Age</h6>
+      <canvas id="ageChart" height="180"></canvas>
+      <div class="mt-2 text-secondary" style="font-size:.73rem;">
+        SLA: Critical 7d · High 30d · Medium 90d · Low 180d
+      </div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="card p-3 h-100">
+      <h6 class="text-secondary mb-3">Remediation Effort</h6>
+      <canvas id="effortChart" height="180"></canvas>
+      <div class="d-flex gap-2 mt-2 justify-content-center flex-wrap" style="font-size:.73rem;">
+        <span class="badge effort-single">Single host</span>
+        <span class="badge effort-few">2–5 hosts</span>
+        <span class="badge effort-orgwide">Org-wide</span>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="card p-3 h-100">
+      <h6 class="text-secondary mb-3">Severity Mix</h6>
+      <canvas id="sevChart" height="180"></canvas>
+    </div>
+  </div>
+</div>
+
+<!-- ── Solution groups ────────────────────────────────────────────────────── -->
+{% if solution_groups %}
+<div class="card p-3 mb-4">
+  <div class="d-flex align-items-center justify-content-between mb-3">
+    <div>
+      <h6 class="mb-0">Batch Fixes — One Action, Multiple Plugins</h6>
+      <small class="text-secondary">Plugins sharing the same remediation — fix once to eliminate multiple findings.</small>
+    </div>
+  </div>
+  <div class="row g-3">
+    {% for g in solution_groups %}
+    <div class="col-md-6 col-lg-4">
+      <div class="sol-card h-100">
+        <div class="d-flex align-items-start justify-content-between mb-2">
+          <span class="badge sev-badge-{{ g.top_severity }}">{{ g.top_severity }}</span>
+          <div class="text-end">
+            <div class="text-white fw-bold">{{ '{:,}'.format(g.plugin_count) }} plugin{{ 's' if g.plugin_count != 1 }}</div>
+            <div class="text-secondary" style="font-size:.72rem;">{{ g.risk_pct }}% of risk</div>
+          </div>
+        </div>
+        <p class="text-secondary small mb-2" style="line-height:1.4;">
+          {{ g.solution[:160] }}{% if g.solution|length > 160 %}…{% endif %}
+        </p>
+        <div class="d-flex flex-wrap gap-1 mb-2">
+          {% for f in g.families %}
+          <span class="badge bg-secondary" style="font-size:.68rem;">{{ f }}</span>
+          {% endfor %}
+        </div>
+        <div class="border-top border-secondary pt-2 mt-auto">
+          {% for p in g.preview %}
+          <div class="text-secondary" style="font-size:.72rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
+               title="{{ p.plugin_name }}">
+            <i class="bi bi-dot"></i>{{ p.plugin_name }}
+          </div>
+          {% endfor %}
+          {% if g.plugin_count > g.preview|length %}
+          <div class="text-secondary" style="font-size:.72rem;">
+            <i class="bi bi-dot"></i>+{{ g.plugin_count - g.preview|length }} more…
+          </div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+<!-- ── Priority list ──────────────────────────────────────────────────────── -->
+<div id="bulkBar" class="card p-2 mb-2 d-none"
+     style="border-color:#1f6feb;background:#0d1b2e;">
+  <form method="post" id="bulkForm" class="d-flex flex-wrap align-items-center gap-2">
+    <span class="small text-white ms-1">
+      <span id="selCount">0</span> solution(s) selected
+    </span>
+    <div class="ms-auto d-flex align-items-center gap-2">
+      <select id="projSelect" class="form-select form-select-sm bg-dark border-secondary text-white"
+              style="width:auto;">
+        <option value="">Choose a project…</option>
+        {% for pr in open_projects %}
+        <option value="{{ url_for('project_items_add', project_id=pr.id) }}">{{ pr.name }}</option>
+        {% endfor %}
+        <option value="__new__">+ New project…</option>
+      </select>
+      <button type="submit" class="btn btn-sm btn-primary">Add to project</button>
+      <button type="button" class="btn btn-sm btn-outline-secondary" onclick="toggleAll(false)">Clear</button>
+    </div>
+  </form>
+</div>
+<div class="card">
+  <div class="p-3 border-bottom border-secondary d-flex align-items-center justify-content-between flex-wrap gap-2">
+    <div>
+      <h6 class="mb-0">Priority Fix List</h6>
+      <small class="text-secondary">Sorted by risk score (CVSS × hosts). Red left-border = SLA breach.</small>
+    </div>
+    <div class="d-flex align-items-center gap-2">
+      <small class="text-secondary">
+        {% if row_limit and total_rows > rows|length %}
+          Showing top <strong class="text-white">{{ '{:,}'.format(rows|length) }}</strong>
+          of {{ '{:,}'.format(total_rows) }} solutions
+        {% else %}
+          {{ '{:,}'.format(total_rows) }} solution{{ 's' if total_rows != 1 }}
+        {% endif %}
+      </small>
+      <select class="form-select form-select-sm bg-dark border-secondary text-white"
+              style="width:auto;"
+              onchange="window.location='?import_id={{ current_import_id }}&include_info={{ '1' if include_info else '0' }}&include_suppressed={{ '1' if include_suppressed else '0' }}&limit='+this.value">
+        {% for n in row_limits %}
+        <option value="{{ n }}" {% if row_limit == n %}selected{% endif %}>Top {{ '{:,}'.format(n) }}</option>
+        {% endfor %}
+        <option value="0" {% if row_limit == 0 %}selected{% endif %}>All ({{ '{:,}'.format(total_rows) }})</option>
+      </select>
+    </div>
+  </div>
+  {% if row_limit == 0 and total_rows > 2000 %}
+  <div class="px-3 py-2 small" style="background:#2a2410;color:#e3c766;border-bottom:1px solid #6a5a20;">
+    <i class="bi bi-exclamation-triangle me-1"></i>
+    Rendering all {{ '{:,}'.format(total_rows) }} solutions. This is slow in the browser;
+    the ranking means the top few hundred carry almost all the risk.
+  </div>
+  {% endif %}
+  <div class="table-responsive">
+    <table id="remTable" class="table table-sm table-hover mb-0" style="width:100%">
+      <thead>
+        <tr>
+          <th style="width:28px;">
+            <input type="checkbox" class="form-check-input" id="selAll"
+                   title="Select all shown" onchange="toggleAll(this.checked)">
+          </th>
+          <th>#</th>
+          <th>Plugin</th>
+          <th>Severity</th>
+          <th>CVSS</th>
+          <th>Hosts</th>
+          <th>Risk Score</th>
+          <th>Risk %</th>
+          <th>Cumulative %</th>
+          <th>Age</th>
+          <th>Effort</th>
+          <th>Fix?</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for r in rows %}
+      <tr class="{% if r.sla_breach %}sla-breach{% endif %}">
+        <td>
+          <input type="checkbox" class="form-check-input sel-plugin"
+                 value="{{ r.plugin_id }}" onchange="updateSel()">
+        </td>
+        <td>
+          <div class="rank-chip
+            {% if r.rank <= 3 %}bg-danger{% elif r.rank <= 10 %}bg-warning text-dark{% else %}bg-secondary{% endif %}">
+            {{ r.rank }}
+          </div>
+        </td>
+        <td style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
+            title="{{ r.plugin_name }}">
+          <a href="{{ url_for('plugin_detail', plugin_id=r.plugin_id) }}?import_id={{ current_import_id }}"
+             class="text-white text-decoration-none">{{ r.plugin_name }}</a>
+        </td>
+        <td><span class="badge sev-badge-{{ r.risk_factor }}">{{ r.risk_factor }}</span></td>
+        <td>
+          {% if r.cvss3 %}
+          <div class="d-flex align-items-center gap-1">
+            <div class="progress" style="width:36px;height:5px;">
+              <div class="progress-bar
+                {% if r.cvss3 >= 9 %}bg-danger{% elif r.cvss3 >= 7 %}bg-warning{% elif r.cvss3 >= 4 %}bg-info{% else %}bg-success{% endif %}"
+                   style="width:{{ (r.cvss3/10*100)|int }}%"></div>
+            </div>
+            <span class="text-white small">{{ r.cvss3 }}</span>
+          </div>
+          {% else %}<span class="text-secondary small">—</span>{% endif %}
+        </td>
+        <td class="text-white">{{ '{:,}'.format(r.host_count) }}</td>
+        <td class="text-white fw-semibold">{{ '{:,}'.format(r.risk_score) }}</td>
+        <td>
+          <div class="d-flex align-items-center gap-1">
+            <div class="progress" style="width:36px;height:5px;">
+              <div class="progress-bar bg-danger" style="width:{{ [r.risk_pct * 5, 100]|min|int }}%"></div>
+            </div>
+            <span class="text-secondary small">{{ r.risk_pct }}%</span>
+          </div>
+        </td>
+        <td>
+          <div class="d-flex align-items-center gap-1">
+            <div class="progress" style="width:42px;height:5px;">
+              <div class="progress-bar
+                {% if r.cumulative_pct < 50 %}bg-danger{% elif r.cumulative_pct < 80 %}bg-warning{% else %}bg-success{% endif %}"
+                   style="width:{{ r.cumulative_pct|int }}%"></div>
+            </div>
+            <span class="text-secondary small">{{ r.cumulative_pct }}%</span>
+          </div>
+        </td>
+        <td>
+          {% if r.days_open is not none %}
+          <span class="{% if r.sla_breach %}text-danger fw-semibold{% else %}text-secondary{% endif %} small">
+            {{ '{:,}'.format(r.days_open) }}d{% if r.sla_breach %} ⚠{% endif %}
+          </span>
+          {% else %}<span class="text-secondary">—</span>{% endif %}
+        </td>
+        <td>
+          <span class="badge small
+            {% if r.effort == 'single' %}effort-single
+            {% elif r.effort == 'few' %}effort-few
+            {% else %}effort-orgwide{% endif %}">
+            {% if r.effort == 'single' %}Single{% elif r.effort == 'few' %}Few{% else %}Org-wide{% endif %}
+          </span>
+        </td>
+        <td>
+          {% if r.has_solution %}
+          <i class="bi bi-check-circle-fill text-success" title="Has remediation steps"></i>
+          {% else %}
+          <i class="bi bi-dash-circle text-secondary" title="No specific fix"></i>
+          {% endif %}
+        </td>
+        <td>
+          <a href="{{ url_for('plugin_detail', plugin_id=r.plugin_id) }}?import_id={{ current_import_id }}"
+             class="btn btn-outline-secondary btn-sm py-0">Detail</a>
+        </td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+const cumulData  = {{ cumulative_chart_json|safe }};
+const scatterRaw = {{ scatter_json|safe }};
+const ageBkts    = {{ age_json|safe }};
+const effortBkts = {{ effort_json|safe }};
+const sevBar     = {{ sev_bar_json|safe }};
+const importId   = {{ current_import_id }};
+
+function applyFilter(key, val) {
+  const u = new URL(window.location);
+  u.searchParams.set(key, val);
+  window.location = u.toString();
+}
+
+// ── Cumulative risk reduction (area line) ────────────────────────────────────
+if (cumulData.length) {
+  const eightyIdx = cumulData.findIndex(d => d.y >= 80);
+  new Chart(document.getElementById('cumulChart'), {
+    type: 'line',
+    data: {
+      labels: cumulData.map(d => d.x),
+      datasets: [{
+        label: 'Risk eliminated (%)',
+        data: cumulData.map(d => d.y),
+        borderColor: '#1f6feb',
+        backgroundColor: 'rgba(31,111,235,.15)',
+        fill: true, tension: 0.35, pointRadius: 3,
+        pointBackgroundColor: cumulData.map((d,i) => i < 3 ? '#da3633' : i < 10 ? '#d29922' : '#1f6feb'),
+      }]
+    },
+    options: {
+      responsive: true,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            title: ctx => `#${ctx[0].label} — ${cumulData[ctx[0].dataIndex].label.slice(0,45)}`,
+            label: ctx => `${ctx.raw}% of total risk eliminated`
+          }
+        },
+        annotation: eightyIdx >= 0 ? {} : undefined,
+      },
+      scales: {
+        x: { grid: { color: '#30363d' }, title: { display: true, text: 'Plugins fixed (rank)', color: '#8b949e' } },
+        y: { grid: { color: '#30363d' }, min: 0, max: 100,
+             title: { display: true, text: 'Risk eliminated (%)', color: '#8b949e' },
+             ticks: { callback: v => v + '%' } }
+      }
+    }
+  });
+
+  // Draw 80% reference line annotation manually via plugin
+  Chart.register({
+    id: 'eightyLine',
+    afterDraw(chart) {
+      const { ctx, chartArea: { left, right, top, bottom }, scales: { y } } = chart;
+      if (!y) return;
+      const yPos = y.getPixelForValue(80);
+      ctx.save();
+      ctx.beginPath();
+      ctx.setLineDash([5, 4]);
+      ctx.strokeStyle = '#238636';
+      ctx.lineWidth = 1.5;
+      ctx.moveTo(left, yPos); ctx.lineTo(right, yPos);
+      ctx.stroke();
+      ctx.fillStyle = '#238636';
+      ctx.font = '10px sans-serif';
+      ctx.fillText('80% risk eliminated', right - 120, yPos - 4);
+      ctx.restore();
+    }
+  });
+}
+
+// ── Scatter: effort vs impact ────────────────────────────────────────────────
+const sevColors = { Critical:'#da3633', High:'#d29922', Medium:'#1f6feb', Low:'#238636', None:'#6e7681' };
+const scatterChart = new Chart(document.getElementById('scatterChart'), {
+  type: 'bubble',
+  data: {
+    datasets: Object.entries(sevColors).map(([sev, color]) => ({
+      label: sev,
+      data: scatterRaw.filter(d => d.sev === sev).map(d => ({
+        x: d.x, y: d.y, r: d.r, name: d.name, id: d.id, risk: d.risk
+      })),
+      backgroundColor: color + 'aa',
+      borderColor: color,
+      borderWidth: 1.5,
+    })).filter(ds => ds.data.length > 0)
+  },
+  options: {
+    responsive: true,
+    plugins: {
+      legend: { position: 'bottom', labels: { font: { size: 11 }, padding: 12 } },
+      tooltip: { callbacks: {
+        label: ctx => [
+          ctx.raw.name.slice(0, 55),
+          `Hosts: ${ctx.raw.x}  Score: ${ctx.raw.y}  Risk: ${ctx.raw.risk}`
+        ]
+      }}
+    },
+    scales: {
+      x: { grid: { color: '#30363d' }, beginAtZero: true,
+           title: { display: true, text: 'Hosts affected (effort)', color: '#8b949e' },
+           ticks: { stepSize: 1 } },
+      y: { grid: { color: '#30363d' }, min: 0, max: 11,
+           title: { display: true, text: 'CVSS / severity score (impact)', color: '#8b949e' } }
+    }
+  }
+});
+
+// Draw quadrant dividers
+Chart.register({
+  id: 'quadrants',
+  afterDraw(chart) {
+    if (chart.canvas.id !== 'scatterChart') return;
+    const { ctx, chartArea: { left, right, top, bottom }, scales: { x, y } } = chart;
+    if (!x || !y) return;
+    const midX = x.getPixelForValue((x.max + x.min) / 2);
+    const midY = y.getPixelForValue(5);
+    ctx.save();
+    ctx.setLineDash([4, 4]);
+    ctx.strokeStyle = '#30363d';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(midX, top); ctx.lineTo(midX, bottom); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(left, midY); ctx.lineTo(right, midY); ctx.stroke();
+    ctx.restore();
+  }
+});
+
+document.getElementById('scatterChart').onclick = function(e) {
+  const pts = scatterChart.getElementsAtEventForMode(e, 'nearest', { intersect: true }, true);
+  if (pts.length) {
+    const d = scatterChart.data.datasets[pts[0].datasetIndex].data[pts[0].index];
+    window.location = `/plugins/${d.id}?import_id=${importId}`;
+  }
+};
+
+// ── Age bar ──────────────────────────────────────────────────────────────────
+new Chart(document.getElementById('ageChart'), {
+  type: 'bar',
+  data: {
+    labels: Object.keys(ageBkts),
+    datasets: [{ label: 'Plugins', data: Object.values(ageBkts),
+      backgroundColor: ['#238636','#d29922','#fd7e14','#da3633'],
+      borderWidth: 0 }]
+  },
+  options: {
+    responsive: true,
+    plugins: { legend: { display: false } },
+    scales: { x: { grid: { color: '#30363d' } }, y: { grid: { color: '#30363d' }, beginAtZero: true, ticks: { stepSize: 1 } } }
+  }
+});
+
+// ── Effort donut ─────────────────────────────────────────────────────────────
+new Chart(document.getElementById('effortChart'), {
+  type: 'doughnut',
+  data: {
+    labels: ['Single host', '2–5 hosts', 'Org-wide'],
+    datasets: [{ data: [effortBkts.single, effortBkts.few, effortBkts['org-wide']],
+      backgroundColor: ['#238636','#d29922','#da3633'],
+      borderColor: '#161b22', borderWidth: 2 }]
+  },
+  options: { cutout: '60%', plugins: { legend: { position: 'bottom', labels: { font: { size: 11 }, padding: 10 } } } }
+});
+
+// ── Severity bar ─────────────────────────────────────────────────────────────
+new Chart(document.getElementById('sevChart'), {
+  type: 'bar',
+  data: {
+    labels: ['Critical','High','Medium','Low','Informational'],
+    datasets: [{ label: 'Plugins', data: ['Critical','High','Medium','Low','Informational'].map(s => sevBar[s]||0),
+      backgroundColor: ['#da3633','#d29922','#1f6feb','#238636','#6e7681'],
+      borderWidth: 0 }]
+  },
+  options: {
+    responsive: true,
+    plugins: { legend: { display: false } },
+    scales: { x: { grid: { color: '#30363d' } }, y: { grid: { color: '#30363d' }, beginAtZero: true, ticks: { stepSize: 1 } } }
+  }
+});
+
+$(document).ready(function() {
+  $('#remTable').DataTable({
+    order: [[5, 'desc']],
+    pageLength: 50,
+    deferRender: true,
+    columnDefs: [{ orderable: false, targets: [0, -1] }],
+    dom: '<"d-flex gap-2 mb-3"f>rt<"d-flex justify-content-between mt-3"ip>',
+  });
+});
+</script>
+
+<script>
+function updateSel() {
+  const n = document.querySelectorAll('.sel-plugin:checked').length;
+  document.getElementById('selCount').textContent = n;
+  document.getElementById('bulkBar').classList.toggle('d-none', n === 0);
+}
+function toggleAll(on) {
+  document.querySelectorAll('.sel-plugin').forEach(c => c.checked = on);
+  const sa = document.getElementById('selAll'); if (sa) sa.checked = on;
+  updateSel();
+}
+document.getElementById('bulkForm').addEventListener('submit', function (e) {
+  e.preventDefault();
+  const sel = document.getElementById('projSelect').value;
+  if (!sel) { alert('Choose a project first.'); return; }
+  if (sel === '__new__') { window.location = '{{ url_for('projects') }}'; return; }
+  const picked = [...document.querySelectorAll('.sel-plugin:checked')].map(c => c.value);
+  if (!picked.length) return;
+  const f = document.createElement('form');
+  f.method = 'post'; f.action = sel;
+  picked.forEach(v => {
+    const i = document.createElement('input');
+    i.type = 'hidden'; i.name = 'plugin_ids'; i.value = v;
+    f.appendChild(i);
+  });
+  document.body.appendChild(f); f.submit();
+});
+</script>
+
+{% endblock %}

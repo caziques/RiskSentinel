@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}Import CSV{% endblock %}
+
+{% block content %}
+<div class="mb-4">
+  <h4 class="fw-bold mb-0">Import Weekly Scan</h4>
+  <small class="text-secondary">Upload a Tenable vulnerability export CSV</small>
+</div>
+
+<div class="row g-4">
+  <div class="col-lg-5">
+    <div class="card p-4">
+      <h6 class="text-secondary mb-3"><i class="bi bi-cloud-upload me-1"></i>Upload CSV File</h6>
+      <form method="post" enctype="multipart/form-data">
+        <div class="mb-3">
+          <label class="form-label small text-secondary">CSV File</label>
+          <input type="file" name="file" accept=".csv" class="form-control" required>
+          <div class="form-text text-secondary">Max 200MB. Date will be extracted from filename automatically.</div>
+        </div>
+        <div class="mb-4">
+          <label class="form-label small text-secondary">Notes (optional)</label>
+          <textarea name="notes" class="form-control" rows="2" placeholder="e.g. Weekly scan 2026-03-27"></textarea>
+        </div>
+        <button type="submit" class="btn btn-danger w-100">
+          <i class="bi bi-cloud-upload me-1"></i> Import Vulnerabilities
+        </button>
+      </form>
+    </div>
+
+    <div class="card p-3 mt-3">
+      <h6 class="text-secondary mb-2"><i class="bi bi-info-circle me-1"></i>Expected Format</h6>
+      <p class="text-secondary small mb-2">The CSV must have these columns:</p>
+      <ul class="text-secondary small mb-0">
+        <li>Last Seen ISO 8601</li>
+        <li>Vulnerability ID</li>
+        <li>Vulnerability Description (JSON)</li>
+        <li>Asset, Ip of the Assets</li>
+        <li>CVSS V3/V4 Severity &amp; Score</li>
+        <li>First Seen ISO 8601</li>
+        <li>Suppressed, Source, Labels</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="col-lg-7">
+    <div class="card">
+      <div class="p-3 border-bottom border-secondary">
+        <h6 class="mb-0 text-secondary">Import History</h6>
+      </div>
+      <div class="table-responsive">
+        <table class="table table-sm table-hover mb-0">
+          <thead><tr><th>Date</th><th>File</th><th>Records</th><th>By</th><th>Notes</th>
+            {% if current_user.role == 'admin' %}<th></th>{% endif %}
+          </tr></thead>
+          <tbody>
+          {% for imp in recent %}
+          <tr>
+            <td class="text-white small text-nowrap">{{ imp.report_date or imp.imported_at.strftime('%Y-%m-%d') }}</td>
+            <td class="text-secondary small" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ imp.filename }}">
+              {{ imp.filename }}
+            </td>
+            <td class="text-white">{{ imp.record_count or 0 }}</td>
+            <td class="text-secondary small">{{ imp.imported_by.username if imp.imported_by else '—' }}</td>
+            <td class="text-secondary small">{{ imp.notes or '' }}</td>
+            {% if current_user.role == 'admin' %}
+            <td>
+              <form method="post" action="{{ url_for('delete_import', import_id=imp.id) }}"
+                    onsubmit="return confirm('Delete this import and all its vulnerabilities?')">
+                <button class="btn btn-outline-danger btn-sm py-0">
+                  <i class="bi bi-trash"></i>
+                </button>
+              </form>
+            </td>
+            {% endif %}
+          </tr>
+          {% endfor %}
+          {% if not recent %}
+          <tr><td colspan="6" class="text-center text-secondary py-4">No imports yet</td></tr>
+          {% endif %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

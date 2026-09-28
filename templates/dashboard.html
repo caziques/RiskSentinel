@@ -1,0 +1,413 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+
+{% block head %}
+<style>
+  .kpi-card { cursor: pointer; transition: border-color .15s, transform .1s; }
+  .kpi-card:hover { transform: translateY(-2px); filter: brightness(1.1); }
+  .kpi-card.active-filter { box-shadow: 0 0 0 2px #1f6feb; }
+  .delta-badge { font-size: .65rem; font-weight: 600; padding: .15rem .4rem; border-radius: 20px; }
+  .delta-new  { background: #da363333; color: #f78166; }
+  .delta-res  { background: #23863633; color: #3fb950; }
+  .drawer-row { cursor: pointer; }
+  .drawer-row:hover td { background: #21262d !important; }
+  .import-row { cursor: pointer; }
+  .import-row:hover td { background: #21262d !important; }
+  .vuln-row { cursor: pointer; }
+  .vuln-row:hover td { background: #21262d !important; }
+  #drawer .offcanvas-body { padding: 0; }
+  .drawer-table th { font-size: .72rem; }
+  .drawer-table td { font-size: .82rem; padding: .4rem .6rem; }
+</style>
+{% endblock %}
+
+{% block content %}
+{% if no_data %}
+<div class="text-center py-5">
+  <i class="bi bi-cloud-upload text-secondary" style="font-size:4rem;"></i>
+  <h4 class="mt-3 text-white">No data yet</h4>
+  <p class="text-secondary">Import your first weekly vulnerability CSV to get started.</p>
+  {% if current_user.role in ('admin','analyst') %}
+  <a href="{{ url_for('import_scan') }}" class="btn btn-danger mt-2">
+    <i class="bi bi-cloud-upload me-1"></i> Import CSV
+  </a>
+  {% endif %}
+</div>
+{% else %}
+
+<!-- Header row -->
+<div class="d-flex align-items-center justify-content-between mb-4 flex-wrap gap-2">
+  <div>
+    <h4 class="fw-bold mb-0">Security Dashboard</h4>
+    <small class="text-secondary">{{ latest.report_date }} · {{ latest.filename }}</small>
+  </div>
+  <div class="d-flex align-items-center gap-2">
+    <select class="form-select form-select-sm" style="width:auto;"
+            onchange="window.location='?import_id='+this.value">
+      {% for imp in all_imports %}
+      <option value="{{ imp.id }}" {% if imp.id == latest.id %}selected{% endif %}>
+        {{ imp.report_date or imp.imported_at.strftime('%Y-%m-%d') }} ({{ imp.record_count or 0 }} records)
+      </option>
+      {% endfor %}
+    </select>
+    {% if current_user.role in ('admin','analyst') %}
+    <a href="{{ url_for('import_scan') }}" class="btn btn-sm btn-outline-danger">
+      <i class="bi bi-cloud-upload me-1"></i> Import
+    </a>
+    {% endif %}
+  </div>
+</div>
+
+<!-- KPI Cards -->
+<div class="row g-3 mb-4">
+  <div class="col-6 col-md-4 col-lg-2">
+    <div class="card kpi-card h-100 p-3 text-center" onclick="filterDrawer('all','All Vulnerabilities')">
+      <div class="text-secondary small mb-1">Total</div>
+      <div class="display-5 text-white">{{ total }}</div>
+      {% if delta %}
+      <div class="d-flex justify-content-center gap-1 mt-1">
+        {% if delta.new %}<span class="delta-badge delta-new">▲ {{ delta.new }} new</span>{% endif %}
+        {% if delta.resolved %}<span class="delta-badge delta-res">▼ {{ delta.resolved }} fixed</span>{% endif %}
+      </div>
+      {% endif %}
+    </div>
+  </div>
+  <div class="col-6 col-md-4 col-lg-2">
+    <div class="card kpi-card h-100 p-3 text-center" style="border-color:#da3633;"
+         onclick="filterDrawer('Critical','Critical Vulnerabilities')">
+      <div class="text-secondary small mb-1">Critical</div>
+      <div class="display-5" style="color:#da3633;">{{ sev.Critical }}</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-4 col-lg-2">
+    <div class="card kpi-card h-100 p-3 text-center" style="border-color:#d29922;"
+         onclick="filterDrawer('High','High Vulnerabilities')">
+      <div class="text-secondary small mb-1">High</div>
+      <div class="display-5" style="color:#d29922;">{{ sev.High }}</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-4 col-lg-2">
+    <div class="card kpi-card h-100 p-3 text-center" style="border-color:#1f6feb;"
+         onclick="filterDrawer('Medium','Medium Vulnerabilities')">
+      <div class="text-secondary small mb-1">Medium</div>
+      <div class="display-5" style="color:#1f6feb;">{{ sev.Medium }}</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-4 col-lg-2">
+    <div class="card kpi-card h-100 p-3 text-center" style="border-color:#238636;"
+         onclick="filterDrawer('Low','Low Vulnerabilities')">
+      <div class="text-secondary small mb-1">Low</div>
+      <div class="display-5" style="color:#238636;">{{ sev.Low }}</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-4 col-lg-2">
+    <div class="card kpi-card h-100 p-3 text-center"
+         onclick="filterDrawer('suppressed','Suppressed Findings')">
+      <div class="text-secondary small mb-1">Suppressed</div>
+      <div class="display-5 text-secondary">{{ suppressed_count }}</div>
+    </div>
+  </div>
+</div>
+
+<!-- Charts row -->
+<div class="row g-4 mb-4">
+  <!-- Severity Donut -->
+  <div class="col-md-4">
+    <div class="card h-100 p-3">
+      <h6 class="text-secondary mb-1">Severity Distribution <small class="fw-normal">(click to drill down)</small></h6>
+      <canvas id="sevChart" style="cursor:pointer;" height="220"></canvas>
+    </div>
+  </div>
+
+  <!-- Weekly Trend -->
+  <div class="col-md-8">
+    <div class="card h-100 p-3">
+      <h6 class="text-secondary mb-1">Weekly Trend <small class="fw-normal">(click data point to drill down)</small></h6>
+      <canvas id="trendChart" style="cursor:pointer;" height="220"></canvas>
+    </div>
+  </div>
+</div>
+
+<!-- Assets chart + Top Vulns -->
+<div class="row g-4 mb-4">
+  <!-- Top Assets horizontal bar -->
+  <div class="col-lg-7">
+    <div class="card p-3 h-100">
+      <div class="d-flex align-items-center justify-content-between mb-2">
+        <h6 class="text-secondary mb-0">Top 10 Riskiest Assets <small class="fw-normal">(click to drill down)</small></h6>
+        <a href="{{ url_for('assets') }}" class="btn btn-sm btn-outline-secondary">View All</a>
+      </div>
+      <canvas id="assetsChart" style="cursor:pointer;" height="220"></canvas>
+    </div>
+  </div>
+
+  <!-- Top Vulnerability Types -->
+  <div class="col-lg-5">
+    <div class="card p-3 h-100">
+      <div class="d-flex align-items-center justify-content-between mb-3">
+        <h6 class="text-secondary mb-0">Top Vulnerability Types</h6>
+        <a href="{{ url_for('vulnerabilities') }}?import_id={{ latest.id }}" class="btn btn-sm btn-outline-secondary">View All</a>
+      </div>
+      <div class="table-responsive">
+        <table class="table table-sm table-hover mb-0">
+          <thead><tr><th>Plugin</th><th>Sev</th><th>Count</th></tr></thead>
+          <tbody>
+          {% for v in top_vulns %}
+          <tr class="vuln-row"
+              onclick="window.location='{{ url_for('plugin_detail', plugin_id=v.plugin_id) }}?import_id={{ latest.id }}'">
+            <td class="small text-white" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
+                title="{{ v.plugin_name }}">{{ v.plugin_name }}</td>
+            <td><span class="badge sev-badge-{{ v.risk_factor }}">{{ v.risk_factor }}</span></td>
+            <td class="text-secondary">{{ v.cnt }}</td>
+          </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Recent Imports -->
+<div class="card p-3">
+  <div class="d-flex align-items-center justify-content-between mb-3">
+    <h6 class="text-secondary mb-0">Recent Imports</h6>
+    <a href="{{ url_for('import_scan') }}" class="btn btn-sm btn-outline-secondary">Manage</a>
+  </div>
+  <div class="table-responsive">
+    <table class="table table-sm mb-0">
+      <thead><tr><th>File</th><th>Report Date</th><th>Imported</th><th>By</th><th>Records</th><th>C</th><th>H</th><th>M</th></tr></thead>
+      <tbody>
+      {% for imp in recent_imports %}
+      <tr class="import-row"
+          onclick="window.location='{{ url_for('vulnerabilities') }}?import_id={{ imp.id }}'">
+        <td class="text-white small">{{ imp.filename }}</td>
+        <td class="text-secondary small">{{ imp.report_date }}</td>
+        <td class="text-secondary small">{{ imp.imported_at.strftime('%Y-%m-%d %H:%M') }}</td>
+        <td class="text-secondary small">{{ imp.imported_by.username if imp.imported_by else '—' }}</td>
+        <td class="text-secondary">{{ imp.record_count or 0 }}</td>
+        <td><span class="badge sev-badge-Critical" style="font-size:.65rem;">
+          {{ imp.vulnerabilities.filter_by(risk_factor='Critical').count() if imp.vulnerabilities else 0 }}
+        </span></td>
+        <td><span class="badge sev-badge-High" style="font-size:.65rem;">
+          {{ imp.vulnerabilities.filter_by(risk_factor='High').count() if imp.vulnerabilities else 0 }}
+        </span></td>
+        <td><span class="badge sev-badge-Medium" style="font-size:.65rem;">
+          {{ imp.vulnerabilities.filter_by(risk_factor='Medium').count() if imp.vulnerabilities else 0 }}
+        </span></td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Drill-down Offcanvas -->
+<div class="offcanvas offcanvas-end" tabindex="-1" id="drawer" style="width:min(680px,100vw);">
+  <div class="offcanvas-header" style="background:#161b22;border-bottom:1px solid #30363d;">
+    <h6 class="offcanvas-title text-white mb-0" id="drawerTitle">Vulnerabilities</h6>
+    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="offcanvas"></button>
+  </div>
+  <div class="offcanvas-body" style="background:#0f1117;overflow-y:auto;">
+    <div id="drawerContent" class="p-3">
+      <div class="text-center text-secondary py-5">
+        <div class="spinner-border spinner-border-sm mb-2"></div><br>Loading…
+      </div>
+    </div>
+  </div>
+</div>
+
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if not no_data %}
+<script>
+const trendRaw     = {{ trend_data|safe }};
+const sevData      = {{ sev|tojson }};
+const assetsData   = {{ assets_chart_json|safe }};
+const delta        = {{ delta|tojson }};
+const currentImpId = {{ latest.id }};
+
+// ── Severity donut ────────────────────────────────────────────────────────────
+const sevChart = new Chart(document.getElementById('sevChart'), {
+  type: 'doughnut',
+  data: {
+    labels: ['Critical','High','Medium','Low','Informational'],
+    datasets: [{
+      data: [sevData.Critical, sevData.High, sevData.Medium, sevData.Low, sevData.None],
+      backgroundColor: ['#da3633','#d29922','#1f6feb','#238636','#6e7681'],
+      borderWidth: 2, borderColor: '#161b22'
+    }]
+  },
+  options: {
+    plugins: { legend: { position: 'bottom', labels: { padding: 12, font: { size: 11 } } } },
+    cutout: '65%'
+  }
+});
+document.getElementById('sevChart').onclick = function(e) {
+  const pts = sevChart.getElementsAtEventForMode(e, 'nearest', { intersect: true }, true);
+  if (pts.length) {
+    const sev = ['Critical','High','Medium','Low','Informational'][pts[0].index];
+    filterDrawer(sev, sev + ' Vulnerabilities');
+  }
+};
+
+// ── Weekly trend ──────────────────────────────────────────────────────────────
+let trendChart;
+if (trendRaw.length > 0) {
+  trendChart = new Chart(document.getElementById('trendChart'), {
+    type: 'line',
+    data: {
+      labels: trendRaw.map(d => d.date),
+      datasets: [
+        { label: 'Critical', data: trendRaw.map(d => d.Critical), borderColor: '#da3633', backgroundColor: '#da363322', tension: 0.3, fill: true, pointRadius: 4, pointHoverRadius: 7 },
+        { label: 'High',     data: trendRaw.map(d => d.High),     borderColor: '#d29922', backgroundColor: '#d2992222', tension: 0.3, fill: true, pointRadius: 4, pointHoverRadius: 7 },
+        { label: 'Medium',   data: trendRaw.map(d => d.Medium),   borderColor: '#1f6feb', backgroundColor: '#1f6feb22', tension: 0.3, pointRadius: 3, pointHoverRadius: 6 },
+        { label: 'Low',      data: trendRaw.map(d => d.Low),      borderColor: '#238636', backgroundColor: '#23863622', tension: 0.3, pointRadius: 3, pointHoverRadius: 6 },
+      ]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { position: 'bottom', labels: { font: { size: 11 } } },
+                 tooltip: { callbacks: { footer: items => 'Click to drill down' } } },
+      scales: {
+        x: { grid: { color: '#30363d' } },
+        y: { grid: { color: '#30363d' }, beginAtZero: true }
+      }
+    }
+  });
+  document.getElementById('trendChart').onclick = function(e) {
+    const pts = trendChart.getElementsAtEventForMode(e, 'index', { intersect: false }, true);
+    if (pts.length) {
+      const idx      = pts[0].index;
+      const dsIdx    = pts[0].datasetIndex;
+      const impId    = trendRaw[idx].import_id;
+      const sevLabels = ['Critical','High','Medium','Low'];
+      const sev      = sevLabels[dsIdx] || 'all';
+      const dateStr  = trendRaw[idx].date;
+      filterDrawer(sev, sev + ' — ' + dateStr, impId);
+    }
+  };
+}
+
+// ── Top assets horizontal bar ─────────────────────────────────────────────────
+const assetsChart = new Chart(document.getElementById('assetsChart'), {
+  type: 'bar',
+  data: {
+    labels: assetsData.map(d => d.asset.length > 26 ? d.asset.slice(0,24)+'…' : d.asset),
+    datasets: [
+      { label: 'Critical', data: assetsData.map(d => d.critical), backgroundColor: '#da3633cc', stack: 'a' },
+      { label: 'High',     data: assetsData.map(d => d.high),     backgroundColor: '#d29922cc', stack: 'a' },
+      { label: 'Medium',   data: assetsData.map(d => d.medium),   backgroundColor: '#1f6febcc', stack: 'a' },
+    ]
+  },
+  options: {
+    indexAxis: 'y',
+    responsive: true,
+    plugins: { legend: { position: 'bottom', labels: { font: { size: 11 } } },
+               tooltip: { mode: 'index' } },
+    scales: {
+      x: { stacked: true, grid: { color: '#30363d' }, beginAtZero: true, ticks: { stepSize: 1 } },
+      y: { stacked: true, grid: { color: '#30363d' }, ticks: { font: { size: 11 } } }
+    }
+  }
+});
+document.getElementById('assetsChart').onclick = function(e) {
+  const pts = assetsChart.getElementsAtEventForMode(e, 'nearest', { intersect: true }, true);
+  if (pts.length) {
+    const asset = assetsData[pts[0].index].asset;
+    filterDrawer('asset:' + asset, 'Asset: ' + asset);
+  }
+};
+
+// ── Drill-down drawer ─────────────────────────────────────────────────────────
+let drawerInstance = null;
+
+function filterDrawer(filterKey, title, overrideImportId) {
+  const impId = overrideImportId || currentImpId;
+  document.getElementById('drawerTitle').textContent = title;
+  document.getElementById('drawerContent').innerHTML =
+    '<div class="text-center text-secondary py-5"><div class="spinner-border spinner-border-sm mb-2"></div><br>Loading…</div>';
+
+  if (!drawerInstance) {
+    drawerInstance = new bootstrap.Offcanvas(document.getElementById('drawer'));
+  }
+  drawerInstance.show();
+
+  // Build query params
+  const params = new URLSearchParams({ import_id: impId, suppressed: 'false' });
+  let viewAllUrl = `/vulnerabilities?import_id=${impId}`;
+
+  if (filterKey === 'all') {
+    // no extra filter
+  } else if (filterKey === 'suppressed') {
+    params.set('suppressed', 'true');
+    viewAllUrl += '&suppressed=true';
+  } else if (filterKey.startsWith('asset:')) {
+    const asset = filterKey.slice(6);
+    params.set('asset', asset);
+    viewAllUrl += '&asset=' + encodeURIComponent(asset);
+  } else if (['Critical','High','Medium','Low','Informational'].includes(filterKey)) {
+    params.set('severity', filterKey);
+    viewAllUrl += '&severity=' + filterKey;
+  }
+
+  fetch('/api/dashboard/vulns?' + params.toString())
+    .then(r => r.json())
+    .then(data => renderDrawer(data, title, viewAllUrl))
+    .catch(() => {
+      document.getElementById('drawerContent').innerHTML =
+        '<div class="p-3 text-danger">Failed to load data.</div>';
+    });
+}
+
+function renderDrawer(data, title, viewAllUrl) {
+  const SEV_COLOR = { Critical:'#da3633', High:'#d29922', Medium:'#1f6feb', Low:'#238636', None:'#6e7681' };
+
+  let rows = '';
+  for (const v of data.items) {
+    const color  = SEV_COLOR[v.risk_factor] || '#6e7681';
+    const cvss   = v.cvss3 ? `<span style="color:${color};font-size:.75rem;">${v.cvss3}</span>` : '<span class="text-secondary">—</span>';
+    const days   = v.days_open != null ? v.days_open + 'd' : '—';
+    rows += `<tr class="drawer-row" onclick="window.location='/vulnerabilities/${v.id}'">
+      <td><a href="/assets/${encodeURIComponent(v.asset)}" onclick="event.stopPropagation()"
+             class="text-white text-decoration-none fw-semibold">${v.asset}</a>
+          <div class="text-secondary" style="font-size:.72rem;">${v.ip || ''}</div></td>
+      <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.78rem;"
+          class="text-white" title="${v.plugin_name}">${v.plugin_name}</td>
+      <td><span class="badge" style="background:${color};">${v.risk_factor}</span></td>
+      <td>${cvss}</td>
+      <td class="text-secondary" style="font-size:.75rem;">${days}</td>
+    </tr>`;
+  }
+
+  const showing = data.items.length < data.total
+    ? `<span class="text-secondary small">Showing ${data.items.length} of ${data.total}</span>`
+    : `<span class="text-secondary small">${data.total} result${data.total !== 1 ? 's' : ''}</span>`;
+
+  document.getElementById('drawerContent').innerHTML = `
+    <div class="d-flex align-items-center justify-content-between p-3 border-bottom" style="border-color:#30363d!important;">
+      ${showing}
+      <a href="${viewAllUrl}" class="btn btn-sm btn-outline-secondary">
+        View all <i class="bi bi-arrow-right"></i>
+      </a>
+    </div>
+    <div class="table-responsive">
+      <table class="table drawer-table table-sm table-hover mb-0" style="--bs-table-bg:transparent;">
+        <thead>
+          <tr>
+            <th>Asset</th>
+            <th>Plugin</th>
+            <th>Severity</th>
+            <th>CVSS</th>
+            <th>Age</th>
+          </tr>
+        </thead>
+        <tbody>${rows || '<tr><td colspan="5" class="text-secondary text-center py-4">No findings</td></tr>'}</tbody>
+      </table>
+    </div>`;
+}
+</script>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,157 @@
+{% extends "base.html" %}
+{% block title %}Update{% endblock %}
+
+{% block content %}
+<div class="mb-4">
+  <h4 class="fw-bold mb-0">Software Update</h4>
+  <small class="text-secondary">
+    Pull the latest RiskSentinel code from your git repository
+  </small>
+</div>
+
+{% if not st.is_repo %}
+<div class="alert d-flex align-items-start gap-2"
+     style="background:#2a1416;border:1px solid #6a2a2a;color:#f78166;">
+  <i class="bi bi-exclamation-octagon mt-1"></i>
+  <div class="small">
+    <strong>{{ st.error }}</strong>
+    <div class="text-secondary mt-2">
+      To enable updates, initialise the application directory as a git clone of
+      your repository. Your database, uploads and credential files are excluded
+      from version control and are never touched by an update.
+    </div>
+  </div>
+</div>
+{% else %}
+
+<div class="row g-3 mb-4">
+  <div class="col-12 col-lg-8">
+    <div class="card p-3 h-100">
+      <h6 class="text-secondary mb-3">Installed</h6>
+      <div class="row g-2 small">
+        <div class="col-4 text-secondary">Version</div>
+        <div class="col-8 text-white">{{ version }}</div>
+        <div class="col-4 text-secondary">Branch</div>
+        <div class="col-8 text-white">{{ st.branch or '—' }}</div>
+        <div class="col-4 text-secondary">Commit</div>
+        <div class="col-8">
+          <code class="text-info">{{ st.commit or '—' }}</code>
+          <span class="text-secondary">{{ st.subject }}</span>
+        </div>
+        <div class="col-4 text-secondary">Committed</div>
+        <div class="col-8 text-secondary">{{ st.when or '—' }}</div>
+        <div class="col-4 text-secondary">Remote</div>
+        <div class="col-8 text-secondary text-truncate">{{ st.remote or 'not set' }}</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-12 col-lg-4">
+    <div class="card p-3 h-100 text-center d-flex flex-column justify-content-center"
+         style="{% if st.behind %}border-color:#1f6feb;{% elif st.dirty %}border-color:#d29922;{% else %}border-color:#238636;{% endif %}">
+      {% if st.dirty %}
+        <i class="bi bi-exclamation-triangle fs-2 mb-2" style="color:#d29922;"></i>
+        <div class="fw-bold" style="color:#d29922;">{{ st.dirty|length }} local change{{ 's' if st.dirty|length != 1 }}</div>
+        <div class="text-secondary small">Updating is blocked</div>
+      {% elif st.behind %}
+        <i class="bi bi-cloud-arrow-down fs-2 mb-2" style="color:#1f6feb;"></i>
+        <div class="fs-4 fw-bold text-white">{{ st.behind }}</div>
+        <div class="text-secondary small">update{{ 's' if st.behind != 1 }} available</div>
+      {% else %}
+        <i class="bi bi-check-circle fs-2 mb-2" style="color:#3fb950;"></i>
+        <div class="fw-bold" style="color:#3fb950;">Up to date</div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<div class="card p-3 mb-4">
+  <form method="post" action="{{ url_for('admin_update_check') }}"
+        class="row g-2 align-items-end">
+    <div class="col-md-9">
+      <label class="form-label text-secondary small">Git repository</label>
+      <input name="remote" class="form-control form-control-sm bg-dark border-secondary text-white"
+             value="{{ st.remote or default_remote }}"
+             placeholder="{{ default_remote }}">
+      <div class="form-text text-secondary">
+        Leave as is to keep the current remote. Changing it repoints this
+        installation at a different repository.
+      </div>
+    </div>
+    <div class="col-md-3 d-grid">
+      <button class="btn btn-sm btn-outline-primary">
+        <i class="bi bi-arrow-repeat me-1"></i>Check for updates
+      </button>
+    </div>
+  </form>
+</div>
+
+{% if st.dirty %}
+<div class="card p-3 mb-4" style="border-color:#6a5a20;">
+  <h6 class="mb-2" style="color:#e3c766;">
+    <i class="bi bi-exclamation-triangle me-1"></i>Uncommitted local changes
+  </h6>
+  <p class="text-secondary small mb-2">
+    Updating would discard these, so it is blocked until they are committed or
+    reverted. This usually means the files were edited directly on this host.
+  </p>
+  <pre class="small text-secondary mb-0" style="max-height:200px;overflow:auto;">{% for f in st.dirty %}{{ f }}
+{% endfor %}</pre>
+</div>
+{% endif %}
+
+{% if incoming %}
+<div class="card mb-4">
+  <div class="p-3 border-bottom border-secondary d-flex justify-content-between align-items-center">
+    <h6 class="mb-0">Incoming changes <span class="badge bg-primary ms-1">{{ incoming|length }}</span></h6>
+    <form method="post" action="{{ url_for('admin_update_pull') }}"
+          onsubmit="return confirm('Apply {{ incoming|length }} update(s)? The application must be restarted afterwards.');">
+      <button class="btn btn-sm btn-primary" {% if st.dirty %}disabled{% endif %}>
+        <i class="bi bi-download me-1"></i>Apply updates
+      </button>
+    </form>
+  </div>
+  <div class="table-responsive">
+    <table class="table table-sm table-hover mb-0">
+      <thead><tr><th>Commit</th><th>Change</th><th>Author</th><th>When</th></tr></thead>
+      <tbody>
+        {% for c in incoming %}
+        <tr>
+          <td><code class="text-info small">{{ c.sha }}</code></td>
+          <td class="small text-white">{{ c.subject }}</td>
+          <td class="small text-secondary">{{ c.author }}</td>
+          <td class="small text-secondary text-nowrap">{{ c.when }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+<div class="card p-3">
+  <h6 class="text-secondary mb-2">What an update does and does not touch</h6>
+  <div class="row small">
+    <div class="col-md-6">
+      <div class="text-white mb-1">Updated</div>
+      <ul class="text-secondary mb-0 ps-3">
+        <li>Application code and templates</li>
+        <li>Scanner importers</li>
+        <li>Database schema, migrated automatically on restart</li>
+      </ul>
+    </div>
+    <div class="col-md-6">
+      <div class="text-white mb-1">Never touched</div>
+      <ul class="text-secondary mb-0 ps-3">
+        <li>Your database and scan history</li>
+        <li>Uploaded files</li>
+        <li>Credentials and <code>.env</code> files</li>
+      </ul>
+    </div>
+  </div>
+  <div class="text-secondary mt-3" style="font-size:.75rem;">
+    Those are excluded from version control, so an update cannot overwrite them.
+    Take a backup before updating a production instance regardless.
+  </div>
+</div>
+{% endif %}
+{% endblock %}

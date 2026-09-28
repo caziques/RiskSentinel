@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}Profile{% endblock %}
+
+{% block content %}
+<div class="mb-4">
+  <h4 class="fw-bold mb-0">My Profile</h4>
+  <small class="text-secondary">Manage your account settings</small>
+</div>
+
+<div class="row g-4">
+  <div class="col-md-5">
+    <div class="card p-4 mb-3">
+      <div class="text-center mb-4">
+        <div class="rounded-circle d-inline-flex align-items-center justify-content-center bg-primary mb-3"
+             style="width:72px;height:72px;font-size:1.8rem;font-weight:700;">
+          {{ current_user.username[0].upper() }}
+        </div>
+        <h5 class="fw-bold mb-0">{{ current_user.username }}</h5>
+        <div class="text-secondary small">{{ current_user.email or 'No email set' }}</div>
+        <span class="badge mt-2
+          {% if current_user.role=='admin' %}bg-danger
+          {% elif current_user.role=='analyst' %}bg-primary
+          {% else %}bg-secondary{% endif %}">
+          {{ current_user.role }}
+        </span>
+      </div>
+      <dl style="display:grid;grid-template-columns:auto 1fr;gap:.4rem .75rem;" class="small">
+        <dt class="text-secondary">Member since</dt>
+        <dd class="text-white">{{ current_user.created_at.strftime('%Y-%m-%d') }}</dd>
+        <dt class="text-secondary">Last login</dt>
+        <dd class="text-white">{{ current_user.last_login.strftime('%Y-%m-%d %H:%M') if current_user.last_login else 'N/A' }}</dd>
+      </dl>
+    </div>
+  </div>
+
+  <div class="col-md-5">
+    <div class="card p-4">
+      <h6 class="text-secondary mb-3"><i class="bi bi-key me-1"></i>Change Password</h6>
+      <form method="post">
+        <div class="mb-3">
+          <label class="form-label small text-secondary">Current Password</label>
+          <input type="password" name="current_password" class="form-control form-control-sm" required>
+        </div>
+        <div class="mb-4">
+          <label class="form-label small text-secondary">New Password</label>
+          <input type="password" name="new_password" class="form-control form-control-sm" required minlength="6"
+                 placeholder="Min 6 characters">
+        </div>
+        <button type="submit" class="btn btn-primary btn-sm w-100">Update Password</button>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}

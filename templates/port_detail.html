@@ -1,0 +1,165 @@
+{% extends "base.html" %}
+{% block title %}Port {{ port }}/{{ proto }}{% endblock %}
+
+{% block content %}
+<div class="mb-3">
+  <a href="{{ url_for('ports') }}?import_id={{ current_import_id }}" class="text-secondary text-decoration-none small">
+    <i class="bi bi-arrow-left"></i> Back to Open Ports
+  </a>
+</div>
+
+<div class="d-flex align-items-center gap-3 mb-4">
+  <div class="d-flex align-items-center justify-content-center rounded"
+       style="width:64px;height:64px;background:#1f6feb22;border:2px solid #1f6feb;">
+    <span class="fw-bold font-monospace" style="font-size:1.1rem;color:#1f6feb;">{{ port }}</span>
+  </div>
+  <div>
+    <h4 class="fw-bold mb-0">
+      Port {{ port }}/{{ proto|upper }}
+      {% if service_name %}<span class="text-secondary fw-normal ms-2">— {{ service_name }}</span>{% endif %}
+    </h4>
+    <div class="text-secondary small mt-1">
+      <span class="badge {% if proto=='tcp' %}bg-primary{% else %}bg-warning text-dark{% endif %} text-uppercase me-2">{{ proto }}</span>
+      {{ host_rows|length }} host{{ 's' if host_rows|length != 1 }} · {{ findings|length }} findings
+      {% if service_name and port in ['21','23','3389','5985','5986','445','1433','3306','5432','6379','22'] %}
+      <span class="badge ms-2" style="background:#da363344;color:#da3633;border:1px solid #da363366;">
+        <i class="bi bi-exclamation-triangle-fill me-1"></i>Sensitive Service
+      </span>
+      {% endif %}
+    </div>
+  </div>
+  <div class="ms-auto">
+    <select class="form-select form-select-sm" style="width:auto;"
+            onchange="window.location='{{ url_for('port_detail', port=port, proto=proto) }}?import_id='+this.value">
+      {% for imp in all_imports %}
+      <option value="{{ imp.id }}" {% if current_import_id == imp.id %}selected{% endif %}>
+        {{ imp.report_date or imp.imported_at.strftime('%Y-%m-%d') }}
+      </option>
+      {% endfor %}
+    </select>
+  </div>
+</div>
+
+<!-- Severity KPIs -->
+<div class="row g-3 mb-4">
+  {% for label, color in [('Critical','#da3633'),('High','#d29922'),('Medium','#1f6feb'),('Low','#238636'),('Informational','#6e7681')] %}
+  <div class="col-6 col-md-4 col-lg-2">
+    <div class="card p-3 text-center h-100" style="border-color:{{ color }};">
+      <div class="text-secondary small mb-1">{{ label }}</div>
+      <div class="display-6 fw-bold" style="color:{{ color }};">{{ sev[label] }}</div>
+    </div>
+  </div>
+  {% endfor %}
+  <div class="col-6 col-md-4 col-lg-2">
+    <div class="card p-3 text-center h-100">
+      <div class="text-secondary small mb-1">Hosts</div>
+      <div class="display-6 fw-bold text-white">{{ host_rows|length }}</div>
+    </div>
+  </div>
+</div>
+
+<div class="row g-4 mb-4">
+  <!-- Hosts with this port -->
+  <div class="col-lg-5">
+    <div class="card p-3 h-100">
+      <h6 class="text-secondary mb-3">
+        <i class="bi bi-hdd-network me-1"></i>Hosts with Port {{ port }}/{{ proto|upper }} Open
+      </h6>
+      <div class="table-responsive">
+        <table id="hostTable" class="table table-sm table-hover mb-0" style="width:100%">
+          <thead><tr><th>Asset</th><th>IP</th><th>Findings</th><th>First Seen</th></tr></thead>
+          <tbody>
+          {% for h in host_rows %}
+          <tr>
+            <td>
+              <a href="{{ url_for('asset_detail', asset_name=h.asset) }}?import_id={{ current_import_id }}"
+                 class="text-white text-decoration-none fw-semibold">{{ h.asset }}</a>
+            </td>
+            <td class="text-secondary small">{{ h.ip_address }}</td>
+            <td class="text-white">{{ h.finding_count }}</td>
+            <td class="text-secondary small">{{ h.first_seen.strftime('%Y-%m-%d') if h.first_seen else '—' }}</td>
+          </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Services / plugins detected on this port -->
+  <div class="col-lg-7">
+    <div class="card p-3 h-100">
+      <h6 class="text-secondary mb-3">
+        <i class="bi bi-puzzle me-1"></i>Services &amp; Plugins Detected
+      </h6>
+      <div class="table-responsive">
+        <table id="pluginTable" class="table table-sm table-hover mb-0" style="width:100%">
+          <thead><tr><th>Plugin / Service</th><th>Severity</th><th>Hosts</th><th>Findings</th></tr></thead>
+          <tbody>
+          {% for p in plugin_rows %}
+          <tr>
+            <td class="text-white small" style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
+                title="{{ p.plugin_name }}">{{ p.plugin_name }}</td>
+            <td><span class="badge sev-badge-{{ p.risk_factor }}">{{ p.risk_factor }}</span></td>
+            <td class="text-white">{{ p.host_count }}</td>
+            <td class="text-secondary">{{ p.finding_count }}</td>
+          </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Full findings table -->
+<div class="card">
+  <div class="p-3 border-bottom border-secondary">
+    <h6 class="mb-0 text-secondary">All Findings on Port {{ port }}/{{ proto|upper }}</h6>
+  </div>
+  <div class="table-responsive">
+    <table id="findingsTable" class="table table-sm table-hover mb-0" style="width:100%">
+      <thead>
+        <tr>
+          <th>Severity</th>
+          <th>Plugin Name</th>
+          <th>Asset</th>
+          <th>IP</th>
+          <th>CVSS V3</th>
+          <th>First Seen</th>
+          <th>Last Seen</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for v in findings %}
+      <tr>
+        <td><span class="badge sev-badge-{{ v.risk_factor }}">{{ v.risk_factor }}</span></td>
+        <td style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
+            title="{{ v.plugin_name }}">{{ v.plugin_name }}</td>
+        <td>
+          <a href="{{ url_for('asset_detail', asset_name=v.asset) }}?import_id={{ current_import_id }}"
+             class="text-white text-decoration-none">{{ v.asset }}</a>
+        </td>
+        <td class="text-secondary small">{{ v.ip_address }}</td>
+        <td class="small">{% if v.cvss_v3_score %}<span class="badge bg-secondary">{{ v.cvss_v3_score }}</span>{% else %}—{% endif %}</td>
+        <td class="text-secondary small">{{ v.first_seen.strftime('%Y-%m-%d') if v.first_seen else '—' }}</td>
+        <td class="text-secondary small">{{ v.last_seen.strftime('%Y-%m-%d') if v.last_seen else '—' }}</td>
+        <td><a href="{{ url_for('vulnerability_detail', vuln_id=v.id) }}" class="btn btn-outline-secondary btn-sm py-0">Detail</a></td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+$(document).ready(function() {
+  $('#hostTable').DataTable({ order: [[2,'desc']], pageLength: 25, columnDefs: [{ orderable: false, targets: -1 }] });
+  $('#pluginTable').DataTable({ order: [[2,'desc']], pageLength: 25, columnDefs: [{ orderable: false, targets: -1 }] });
+  $('#findingsTable').DataTable({ order: [[0,'desc']], pageLength: 50, columnDefs: [{ orderable: false, targets: -1 }] });
+});
+</script>
+{% endblock %}

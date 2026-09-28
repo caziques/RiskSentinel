@@ -1,0 +1,27 @@
+name: risksentinel
+
+services:
+  risk-sentinel:
+    image: risksentinel:latest
+    container_name: risk-sentinel
+    ports:
+      - "8080:8080"
+    environment:
+      - SECRET_KEY=${SECRET_KEY}
+      - WORKERS=${WORKERS:-4}
+      - TIMEOUT=${TIMEOUT:-120}
+      - LEVELBLUE_BASE_URL=${LEVELBLUE_BASE_URL:-https://nebula-group.alienvault.cloud}
+      - LEVELBLUE_CLIENT_ID=${LEVELBLUE_CLIENT_ID}
+      - LEVELBLUE_CLIENT_SECRET=${LEVELBLUE_CLIENT_SECRET}
+      - RAPID7_API_KEY=${RAPID7_API_KEY}
+      - RAPID7_REGION=${RAPID7_REGION:-eu}
+    volumes:
+      - vuln_data:/app/instance
+      - vuln_uploads:/app/uploads
+    restart: unless-stopped
+
+volumes:
+  vuln_data:
+    driver: local
+  vuln_uploads:
+    driver: local

@@ -1,0 +1,212 @@
+{% extends "base.html" %}
+{% block title %}Trends{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-4">
+  <div>
+    <h4 class="fw-bold mb-0">Trends &amp; Intelligence</h4>
+    <small class="text-secondary">Across {{ imports|length }} weekly imports</small>
+  </div>
+</div>
+
+{% if imports|length < 2 %}
+<div class="alert alert-secondary">
+  <i class="bi bi-info-circle me-2"></i>
+  Trend analysis requires at least 2 weekly imports. Import more scans to see trends.
+</div>
+{% endif %}
+
+<!-- New vs Resolved -->
+{% if new_this_week is defined %}
+<div class="row g-3 mb-4">
+  <div class="col-md-3">
+    <div class="card p-3 text-center" style="border-color:#da3633;">
+      <div class="text-secondary small mb-1">New This Week</div>
+      <div class="display-5 fw-bold" style="color:#da3633;">{{ new_this_week }}</div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="card p-3 text-center" style="border-color:#238636;">
+      <div class="text-secondary small mb-1">Resolved This Week</div>
+      <div class="display-5 fw-bold" style="color:#238636;">{{ resolved_this_week }}</div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="card p-3 text-center">
+      <div class="text-secondary small mb-1">Total Imports</div>
+      <div class="display-5 fw-bold text-white">{{ imports|length }}</div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="card p-3 text-center">
+      <div class="text-secondary small mb-1">Net Change</div>
+      {% set net = new_this_week - resolved_this_week %}
+      <div class="display-5 fw-bold {% if net > 0 %}text-danger{% elif net < 0 %}text-success{% else %}text-secondary{% endif %}">
+        {% if net > 0 %}+{% endif %}{{ net }}
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<!-- Severity over time -->
+<div class="card p-3 mb-4">
+  <h6 class="text-secondary mb-3">Severity Over Time (Weekly)</h6>
+  <canvas id="trendChart" height="120"></canvas>
+</div>
+
+<div class="row g-4 mb-4">
+  <!-- Plugin Families -->
+  <div class="col-md-5">
+    <div class="card p-3 h-100">
+      <h6 class="text-secondary mb-3">Top Plugin Families <small class="text-secondary fw-normal">(click to drill down)</small></h6>
+      <canvas id="familyChart" height="260" style="cursor:pointer;"></canvas>
+    </div>
+  </div>
+
+  <!-- Most Persistent Vulnerabilities -->
+  <div class="col-md-7">
+    <div class="card p-3 h-100">
+      <h6 class="text-secondary mb-3">Most Persistent Vulnerabilities</h6>
+      <p class="text-secondary small">Appearing in the most weekly scans — highest remediation priority.</p>
+      <div class="table-responsive">
+        <table class="table table-sm mb-0">
+          <thead><tr><th>Plugin</th><th>Severity</th><th>Weeks</th><th>Assets</th></tr></thead>
+          <tbody>
+          {% for r in recurring %}
+          <tr>
+            <td class="text-white small" style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ r.plugin_name }}">
+              {{ r.plugin_name }}
+            </td>
+            <td><span class="badge sev-badge-{{ r.risk_factor }}">{{ r.risk_factor }}</span></td>
+            <td>
+              <div class="d-flex align-items-center gap-2">
+                <div class="progress" style="width:60px;height:6px;">
+                  <div class="progress-bar bg-warning" style="width:{{ (r.weeks / (imports|length) * 100)|int }}%"></div>
+                </div>
+                <small class="text-secondary">{{ r.weeks }}</small>
+              </div>
+            </td>
+            <td class="text-secondary">{{ r.assets }}</td>
+          </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Plugin Families table -->
+<div class="card p-3 mb-4">
+  <div class="d-flex align-items-center justify-content-between mb-3">
+    <h6 class="text-secondary mb-0">Plugin Families — Click to Drill Down</h6>
+    <small class="text-secondary">All time · {{ families|length }} families</small>
+  </div>
+  <div class="table-responsive">
+    <table id="familyTable" class="table table-sm table-hover mb-0" style="width:100%">
+      <thead><tr><th>Family</th><th>Findings</th><th>Distribution</th><th></th></tr></thead>
+      <tbody>
+      {% set max_fc = families[0][1] if families else 1 %}
+      {% for family, count in families %}
+      <tr style="cursor:pointer;" onclick="window.location='{{ url_for('family_detail', family_name=family) }}'">
+        <td class="text-white fw-semibold">{{ family }}</td>
+        <td class="text-white">{{ count }}</td>
+        <td style="min-width:160px;">
+          <div class="d-flex align-items-center gap-2">
+            <div class="progress flex-grow-1" style="height:8px;max-width:120px;">
+              <div class="progress-bar bg-primary" style="width:{{ (count/max_fc*100)|int }}%"></div>
+            </div>
+            <small class="text-secondary">{{ (count/max_fc*100)|int }}%</small>
+          </div>
+        </td>
+        <td>
+          <a href="{{ url_for('family_detail', family_name=family) }}"
+             class="btn btn-outline-secondary btn-sm py-0"
+             onclick="event.stopPropagation()">Detail</a>
+        </td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Import History -->
+<div class="card p-3">
+  <h6 class="text-secondary mb-3">Import History</h6>
+  <div class="table-responsive">
+    <table class="table table-sm mb-0">
+      <thead><tr><th>Report Date</th><th>Filename</th><th class="text-danger">Critical</th><th class="text-warning">High</th><th class="text-info">Medium</th><th class="text-success">Low</th><th>Total</th></tr></thead>
+      <tbody>
+      {% for row in trend_data|fromjson %}
+      <tr>
+        <td class="text-white">{{ row.date }}</td>
+        <td class="text-secondary small">—</td>
+        <td><span class="badge sev-badge-Critical">{{ row.Critical }}</span></td>
+        <td><span class="badge sev-badge-High">{{ row.High }}</span></td>
+        <td><span class="badge sev-badge-Medium">{{ row.Medium }}</span></td>
+        <td><span class="badge sev-badge-Low">{{ row.Low }}</span></td>
+        <td class="text-white">{{ row.total }}</td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const trendRaw   = {{ trend_data|safe }};
+const familyData = {{ families_json|safe }};
+
+new Chart(document.getElementById('trendChart'), {
+  type: 'line',
+  data: {
+    labels: trendRaw.map(d => d.date),
+    datasets: [
+      { label: 'Critical', data: trendRaw.map(d => d.Critical), borderColor: '#da3633', backgroundColor: '#da363333', tension: 0.3, fill: true },
+      { label: 'High',     data: trendRaw.map(d => d.High),     borderColor: '#d29922', backgroundColor: '#d2992222', tension: 0.3, fill: true },
+      { label: 'Medium',   data: trendRaw.map(d => d.Medium),   borderColor: '#1f6feb', backgroundColor: '#1f6feb22', tension: 0.3 },
+      { label: 'Low',      data: trendRaw.map(d => d.Low),      borderColor: '#238636', tension: 0.3 },
+      { label: 'Total',    data: trendRaw.map(d => d.total),    borderColor: '#8b949e', tension: 0.3, borderDash: [4,4] },
+    ]
+  },
+  options: {
+    responsive: true,
+    plugins: { legend: { position: 'bottom', labels: { font: { size: 11 } } } },
+    scales: { x: { grid: { color: '#30363d' } }, y: { grid: { color: '#30363d' }, beginAtZero: true } }
+  }
+});
+
+const familyChart = new Chart(document.getElementById('familyChart'), {
+  type: 'bar',
+  data: {
+    labels: familyData.map(d => d.family),
+    datasets: [{ label: 'Count', data: familyData.map(d => d.count), backgroundColor: '#1f6feb88', borderColor: '#1f6feb',
+                 borderWidth: 1, hoverBackgroundColor: '#1f6febcc' }]
+  },
+  options: {
+    indexAxis: 'y',
+    responsive: true,
+    plugins: { legend: { display: false }, tooltip: { callbacks: {
+      label: ctx => `${ctx.raw} findings — click to drill down`
+    }}},
+    scales: { x: { grid: { color: '#30363d' }, beginAtZero: true }, y: { grid: { color: '#30363d' }, ticks: { font: { size: 11 } } } }
+  }
+});
+
+document.getElementById('familyChart').onclick = function(e) {
+  const pts = familyChart.getElementsAtEventForMode(e, 'nearest', { intersect: true }, true);
+  if (pts.length) {
+    const family = familyData[pts[0].index].family;
+    window.location = '/trends/family/' + encodeURIComponent(family);
+  }
+};
+
+$(document).ready(function() {
+  $('#familyTable').DataTable({ order: [[1,'desc']], pageLength: 25, columnDefs: [{ orderable: false, targets: -1 }] });
+});
+</script>
+{% endblock %}

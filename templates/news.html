@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block title %}Threat News{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-4">
+  <div>
+    <h4 class="fw-bold mb-0">Threat Intelligence News</h4>
+    <small class="text-secondary">{{ entries|length }} articles from {{ feeds|selectattr('active')|list|length }} active feed(s)</small>
+  </div>
+  {% if current_user.role == 'admin' %}
+  <a href="{{ url_for('admin_feeds') }}" class="btn btn-sm btn-outline-secondary">
+    <i class="bi bi-rss me-1"></i> Manage Feeds
+  </a>
+  {% endif %}
+</div>
+
+{% if fetch_errors %}
+<div class="alert alert-warning py-2 small">
+  <strong>Feed errors:</strong>
+  {% for err in fetch_errors %}<div>{{ err }}</div>{% endfor %}
+</div>
+{% endif %}
+
+{% if not entries %}
+<div class="card p-5 text-center text-secondary">
+  <i class="bi bi-rss fs-1 mb-3 d-block"></i>
+  <div>No articles found. Check that your feeds are active and reachable.</div>
+  {% if current_user.role == 'admin' %}
+  <a href="{{ url_for('admin_feeds') }}" class="btn btn-sm btn-outline-primary mt-3">Manage Feeds</a>
+  {% endif %}
+</div>
+{% else %}
+
+<!-- Feed filter pills -->
+{% if feeds|selectattr('active')|list|length > 1 %}
+<div class="d-flex flex-wrap gap-2 mb-3" id="feedFilters">
+  <button class="btn btn-sm btn-primary feed-filter active" data-feed="all">All</button>
+  {% for feed in feeds if feed.active %}
+  <button class="btn btn-sm btn-outline-secondary feed-filter" data-feed="{{ feed.id }}">{{ feed.name }}</button>
+  {% endfor %}
+</div>
+{% endif %}
+
+<div class="row g-3" id="newsGrid">
+  {% for entry in entries %}
+  <div class="col-12 col-lg-6 news-card" data-feed="{{ entry.feed_id }}">
+    <div class="card h-100" style="border-left: 3px solid #1f6feb;">
+      <div class="card-body">
+        <div class="d-flex align-items-start justify-content-between gap-2 mb-2">
+          <a href="{{ entry.link }}" target="_blank" rel="noopener noreferrer"
+             class="text-white fw-semibold text-decoration-none lh-sm"
+             style="font-size:.9rem;">
+            {{ entry.title }}
+            <i class="bi bi-box-arrow-up-right text-secondary ms-1" style="font-size:.7rem;"></i>
+          </a>
+        </div>
+        {% if entry.summary %}
+        <p class="text-secondary small mb-2" style="font-size:.8rem;line-height:1.5;">
+          {{ entry.summary }}{% if entry.summary|length == 300 %}…{% endif %}
+        </p>
+        {% endif %}
+        <div class="d-flex align-items-center gap-2 mt-auto">
+          <span class="badge bg-secondary" style="font-size:.7rem;">{{ entry.feed_name }}</span>
+          {% if entry.published %}
+          <span class="text-secondary ms-auto" style="font-size:.75rem;">
+            <i class="bi bi-clock me-1"></i>{{ entry.published.strftime('%d %b %Y') }}
+          </span>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.querySelectorAll('.feed-filter').forEach(btn => {
+  btn.addEventListener('click', function() {
+    document.querySelectorAll('.feed-filter').forEach(b => b.classList.remove('active', 'btn-primary'));
+    document.querySelectorAll('.feed-filter').forEach(b => {
+      b.classList.remove('btn-primary');
+      b.classList.add('btn-outline-secondary');
+    });
+    this.classList.remove('btn-outline-secondary');
+    this.classList.add('btn-primary', 'active');
+    const feed = this.dataset.feed;
+    document.querySelectorAll('.news-card').forEach(card => {
+      card.style.display = (feed === 'all' || card.dataset.feed === feed) ? '' : 'none';
+    });
+  });
+});
+</script>
+{% endblock %}

@@ -1,0 +1,260 @@
+{% extends "base.html" %}
+{% block title %}{{ family_name }}{% endblock %}
+
+{% block content %}
+<div class="mb-3">
+  <a href="{{ url_for('trends') }}" class="text-secondary text-decoration-none small">
+    <i class="bi bi-arrow-left"></i> Back to Trends
+  </a>
+</div>
+
+<div class="d-flex align-items-center justify-content-between mb-4">
+  <div>
+    <h4 class="fw-bold mb-0"><i class="bi bi-collection me-2 text-secondary"></i>{{ family_name }}</h4>
+    <small class="text-secondary">Plugin family · {{ total }} findings across {{ host_rows|length }} hosts</small>
+  </div>
+  <select class="form-select form-select-sm" style="width:auto;"
+          onchange="window.location='{{ url_for('family_detail', family_name=family_name) }}?import_id='+this.value">
+    {% for imp in all_imports %}
+    <option value="{{ imp.id }}" {% if current_import_id == imp.id %}selected{% endif %}>
+      {{ imp.report_date or imp.imported_at.strftime('%Y-%m-%d') }}
+    </option>
+    {% endfor %}
+  </select>
+</div>
+
+<!-- Severity KPIs -->
+<div class="row g-3 mb-4">
+  {% for label, color in [('Critical','#da3633'),('High','#d29922'),('Medium','#1f6feb'),('Low','#238636'),('Informational','#6e7681')] %}
+  <div class="col-6 col-md-4 col-lg-2">
+    <div class="card p-3 text-center h-100" style="border-color:{{ color }};">
+      <div class="text-secondary small mb-1">{{ label }}</div>
+      <div class="display-6 fw-bold" style="color:{{ color }};">{{ sev[label] }}</div>
+    </div>
+  </div>
+  {% endfor %}
+  <div class="col-6 col-md-4 col-lg-2">
+    <div class="card p-3 text-center h-100">
+      <div class="text-secondary small mb-1">Total</div>
+      <div class="display-6 fw-bold text-white">{{ total }}</div>
+    </div>
+  </div>
+</div>
+
+<!-- Charts row -->
+<div class="row g-4 mb-4">
+  <div class="col-md-8">
+    <div class="card p-3 h-100">
+      <h6 class="text-secondary mb-3">Trend Over Time</h6>
+      <canvas id="histChart" height="180"></canvas>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="card p-3 h-100">
+      <h6 class="text-secondary mb-3">Severity Split</h6>
+      <canvas id="sevChart" height="200"></canvas>
+    </div>
+  </div>
+</div>
+
+<!-- Tabs: Hosts · Plugins · Ports -->
+<ul class="nav nav-tabs border-secondary mb-0" id="familyTabs">
+  <li class="nav-item">
+    <a class="nav-link active" data-bs-toggle="tab" href="#tabHosts">
+      Hosts <span class="badge bg-secondary ms-1">{{ host_rows|length }}</span>
+    </a>
+  </li>
+  <li class="nav-item">
+    <a class="nav-link" data-bs-toggle="tab" href="#tabPlugins">
+      Plugins <span class="badge bg-secondary ms-1">{{ plugin_rows|length }}</span>
+    </a>
+  </li>
+  <li class="nav-item">
+    <a class="nav-link" data-bs-toggle="tab" href="#tabPorts">
+      Ports <span class="badge bg-secondary ms-1">{{ port_rows|length }}</span>
+    </a>
+  </li>
+</ul>
+
+<div class="tab-content">
+
+  <!-- HOSTS -->
+  <div class="tab-pane fade show active" id="tabHosts">
+    <div class="card border-top-0 rounded-top-0">
+      <div class="table-responsive">
+        <table id="hostTable" class="table table-sm table-hover mb-0" style="width:100%">
+          <thead>
+            <tr><th>Asset</th><th>IP</th><th class="text-danger">Critical</th><th class="text-warning">High</th><th class="text-info">Medium</th><th>Total</th><th>Risk Score</th><th></th></tr>
+          </thead>
+          <tbody>
+          {% set max_rs = host_rows[0].risk_score if host_rows else 1 %}
+          {% for h in host_rows %}
+          <tr>
+            <td>
+              <a href="{{ url_for('asset_detail', asset_name=h.asset) }}?import_id={{ current_import_id }}"
+                 class="text-white fw-semibold text-decoration-none">{{ h.asset }}</a>
+            </td>
+            <td class="text-secondary small">{{ h.ip_address }}</td>
+            <td>{% if h.critical %}<span class="badge sev-badge-Critical">{{ h.critical }}</span>{% else %}<span class="text-secondary">0</span>{% endif %}</td>
+            <td>{% if h.high %}<span class="badge sev-badge-High">{{ h.high }}</span>{% else %}<span class="text-secondary">0</span>{% endif %}</td>
+            <td>{% if h.medium %}<span class="badge sev-badge-Medium">{{ h.medium }}</span>{% else %}<span class="text-secondary">0</span>{% endif %}</td>
+            <td class="text-white">{{ h.total }}</td>
+            <td style="min-width:120px;">
+              <div class="d-flex align-items-center gap-2">
+                <div class="progress flex-grow-1" style="height:6px;max-width:80px;">
+                  <div class="progress-bar bg-danger" style="width:{{ ((h.risk_score or 0)/(max_rs or 1)*100)|int }}%"></div>
+                </div>
+                <small class="text-secondary">{{ h.risk_score or 0 }}</small>
+              </div>
+            </td>
+            <td>
+              <a href="{{ url_for('vulnerabilities') }}?import_id={{ current_import_id }}&asset={{ h.asset }}&search={{ family_name }}"
+                 class="btn btn-outline-secondary btn-sm py-0">Vulns</a>
+            </td>
+          </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- PLUGINS -->
+  <div class="tab-pane fade" id="tabPlugins">
+    <div class="card border-top-0 rounded-top-0">
+      <div class="table-responsive">
+        <table id="pluginTable" class="table table-sm table-hover mb-0" style="width:100%">
+          <thead>
+            <tr><th>Plugin Name</th><th>Severity</th><th>Hosts Affected</th><th>Findings</th><th></th></tr>
+          </thead>
+          <tbody>
+          {% set max_hc = plugin_rows[0].host_count if plugin_rows else 1 %}
+          {% for p in plugin_rows %}
+          <tr>
+            <td class="text-white small" style="max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
+                title="{{ p.plugin_name }}">{{ p.plugin_name }}</td>
+            <td><span class="badge sev-badge-{{ p.risk_factor }}">{{ p.risk_factor }}</span></td>
+            <td>
+              <div class="d-flex align-items-center gap-2">
+                <div class="progress" style="height:6px;width:70px;">
+                  <div class="progress-bar bg-info" style="width:{{ (p.host_count/(max_hc or 1)*100)|int }}%"></div>
+                </div>
+                <span class="text-white">{{ p.host_count }}</span>
+              </div>
+            </td>
+            <td class="text-secondary">{{ p.finding_count }}</td>
+            <td>
+              <a href="{{ url_for('vulnerabilities') }}?import_id={{ current_import_id }}&search={{ p.plugin_name[:40] }}"
+                 class="btn btn-outline-secondary btn-sm py-0">View</a>
+            </td>
+          </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- PORTS -->
+  <div class="tab-pane fade" id="tabPorts">
+    <div class="card border-top-0 rounded-top-0">
+      {% if port_rows %}
+      <div class="table-responsive">
+        <table id="portTable" class="table table-sm table-hover mb-0" style="width:100%">
+          <thead>
+            <tr><th>Port</th><th>Protocol</th><th>Service</th><th>Hosts</th><th>Findings</th><th>Exposure</th><th></th></tr>
+          </thead>
+          <tbody>
+          {% set max_hc = port_rows[0].host_count if port_rows else 1 %}
+          {% for r in port_rows %}
+          {% set service = well_known.get(r[0], '') %}
+          {% set pct = (r[2] / (host_rows|length) * 100)|int if host_rows else 0 %}
+          <tr>
+            <td>
+              <a href="{{ url_for('port_detail', port=r[0], proto=r[1]) }}?import_id={{ current_import_id }}"
+                 class="fw-bold font-monospace text-white text-decoration-none port-link">{{ r[0] }}</a>
+            </td>
+            <td>
+              <span class="badge {% if r[1]=='tcp' %}bg-primary{% else %}bg-warning text-dark{% endif %} text-uppercase" style="font-size:.7rem;">{{ r[1] }}</span>
+            </td>
+            <td class="text-secondary small">
+              {% if service %}<span class="badge bg-secondary">{{ service }}</span>{% else %}—{% endif %}
+            </td>
+            <td class="text-white">{{ r[2] }}</td>
+            <td class="text-secondary">{{ r[3] }}</td>
+            <td style="min-width:110px;">
+              <div class="d-flex align-items-center gap-2">
+                <div class="progress flex-grow-1" style="height:6px;max-width:70px;">
+                  <div class="progress-bar {% if pct>80 %}bg-danger{% elif pct>40 %}bg-warning{% else %}bg-info{% endif %}"
+                       style="width:{{ pct }}%"></div>
+                </div>
+                <small class="text-secondary">{{ pct }}%</small>
+              </div>
+            </td>
+            <td>
+              <a href="{{ url_for('port_detail', port=r[0], proto=r[1]) }}?import_id={{ current_import_id }}"
+                 class="btn btn-outline-secondary btn-sm py-0">Detail</a>
+            </td>
+          </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="p-4 text-center text-secondary">No specific port data for this family.</div>
+      {% endif %}
+    </div>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const histData = {{ history_data|safe }};
+const sevData  = {{ sev|tojson }};
+
+if (histData.length > 1) {
+  new Chart(document.getElementById('histChart'), {
+    type: 'line',
+    data: {
+      labels: histData.map(d => d.date),
+      datasets: [
+        { label: 'Total',    data: histData.map(d => d.total),    borderColor: '#8b949e', tension: 0.3, borderDash: [4,4] },
+        { label: 'Critical', data: histData.map(d => d.critical), borderColor: '#da3633', backgroundColor: '#da363322', tension: 0.3, fill: true },
+        { label: 'High',     data: histData.map(d => d.high),     borderColor: '#d29922', tension: 0.3 },
+        { label: 'Medium',   data: histData.map(d => d.medium),   borderColor: '#1f6feb', tension: 0.3 },
+      ]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { position: 'bottom', labels: { font: { size: 11 } } } },
+      scales: { x: { grid: { color: '#30363d' } }, y: { grid: { color: '#30363d' }, beginAtZero: true } }
+    }
+  });
+} else {
+  document.getElementById('histChart').parentElement.innerHTML = '<p class="text-secondary small p-2">Only one import — trend visible after next weekly scan.</p>';
+}
+
+new Chart(document.getElementById('sevChart'), {
+  type: 'doughnut',
+  data: {
+    labels: ['Critical','High','Medium','Low','Informational'],
+    datasets: [{
+      data: [sevData.Critical, sevData.High, sevData.Medium, sevData.Low, sevData.None],
+      backgroundColor: ['#da3633','#d29922','#1f6feb','#238636','#6e7681'],
+      borderColor: '#161b22', borderWidth: 2
+    }]
+  },
+  options: { cutout: '62%', plugins: { legend: { position: 'bottom', labels: { font: { size: 11 }, padding: 12 } } } }
+});
+
+$(document).ready(function() {
+  $('#hostTable').DataTable({ order: [[6,'desc']], pageLength: 25, columnDefs: [{ orderable: false, targets: -1 }] });
+  $('#pluginTable').DataTable({ order: [[2,'desc']], pageLength: 25, columnDefs: [{ orderable: false, targets: -1 }] });
+  if ($('#portTable').length) {
+    $('#portTable').DataTable({ order: [[3,'desc']], pageLength: 25, columnDefs: [{ orderable: false, targets: -1 }] });
+  }
+});
+</script>
+{% endblock %}
