@@ -138,12 +138,45 @@
             </div>
             <div class="col-6">
               <label class="form-label text-secondary small">Scope</label>
-              <select name="project_type" class="form-select bg-dark border-secondary text-white">
+              <select name="project_type" id="projectType"
+                      class="form-select bg-dark border-secondary text-white"
+                      onchange="document.getElementById('dynScope').style.display = this.value === 'dynamic' ? '' : 'none';">
                 <option value="static">Static, fixed at creation</option>
                 <option value="dynamic">Dynamic, absorbs new findings</option>
               </select>
             </div>
           </div>
+
+          <div id="dynScope" class="mt-3 p-3 rounded"
+               style="display:none;background:#0d1117;border:1px solid #30363d;">
+            <div class="small text-white mb-2">
+              <i class="bi bi-arrow-repeat me-1"></i>What this project takes on
+            </div>
+            <p class="text-secondary small">
+              Each time the project is opened after a new scan, solutions matching
+              these criteria are added automatically. Leave both blank and it will
+              only refresh counts on the solutions it already holds.
+            </p>
+            <label class="form-label text-secondary small mb-1">Severities</label>
+            <div class="d-flex gap-3 mb-3 flex-wrap">
+              {% for sev in severities %}
+              <div class="form-check">
+                <input class="form-check-input" type="checkbox" name="scope_severities"
+                       value="{{ sev }}" id="newsev{{ sev }}"
+                       {% if sev in ('Critical', 'High') %}checked{% endif %}>
+                <label class="form-check-label small" for="newsev{{ sev }}">{{ sev }}</label>
+              </div>
+              {% endfor %}
+            </div>
+            <label class="form-label text-secondary small mb-1">Limit to asset group</label>
+            <select name="scope_group_id" class="form-select form-select-sm bg-dark border-secondary text-white">
+              <option value="">All assets</option>
+              {% for g in asset_groups %}
+              <option value="{{ g.id }}">{{ g.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+
           <p class="text-secondary small mt-3 mb-0">
             Solutions are added from the Remediation page, or from inside the project once created.
           </p>

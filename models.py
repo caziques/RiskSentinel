@@ -260,11 +260,44 @@ class RemediationProject(db.Model):
     closed_by_id  = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
     source_import_id = db.Column(db.Integer, db.ForeignKey('scan_imports.id'), nullable=True)
 
-    owner      = db.relationship('User', foreign_keys=[owner_id])
+    # Criteria a dynamic project re-evaluates against each new import. Without
+    # these a dynamic project could only refresh counts on solutions it already
+    # held, never absorb newly discovered work, which is the point of it being
+    # dynamic. A dynamic project with no criteria keeps the old behaviour rather
+    # than silently pulling in the whole estate.
+    scope_severities = db.Column(db.String(64), nullable=True)   # 'Critical,High'
+    scope_group_id   = db.Column(db.Integer, db.ForeignKey('asset_groups.id'), nullable=True)
+    last_refresh_at  = db.Column(db.DateTime, nullable=True)
+    last_refresh_added = db.Column(db.Integer, default=0)
+
+    owner       = db.relationship('User', foreign_keys=[owner_id])
+    scope_group = db.relationship('AssetGroup', foreign_keys=[scope_group_id])
     created_by = db.relationship('User', foreign_keys=[created_by_id])
     customer   = db.relationship('Customer', foreign_keys=[customer_id])
     items      = db.relationship('RemediationItem', backref='project',
                                  lazy='dynamic', cascade='all, delete-orphan')
+
+    @property
+    def severity_list(self):
+        return [x for x in (self.scope_severities or '').split(',') if x]
+
+    @property
+    def has_scope_criteria(self):
+        """Whether this project can absorb newly discovered work."""
+        return bool(self.project_type == 'dynamic'
+                    and (self.scope_severities or self.scope_group_id))
+
+    @property
+    def scope_summary(self):
+        if self.project_type != 'dynamic':
+            return 'Fixed at creation'
+        if not self.has_scope_criteria:
+            return 'Dynamic, no criteria set'
+        parts = []
+        if self.scope_severities:
+            parts.append(' / '.join(self.severity_list))
+        parts.append(self.scope_group.name if self.scope_group else 'all assets')
+        return 'New ' + ' on '.join(parts)
 
     @property
     def is_expired(self):

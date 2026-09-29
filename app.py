@@ -17,7 +17,7 @@ from werkzeug.utils import secure_filename
 
 from models import db, User, Customer, UserCustomer, ScanImport, Vulnerability, NewsFeed, RiskAcceptance, AssetGroup, AssetGroupMember, RemediationProject, RemediationItem, RemediationSnapshot, SuppressionRule
 
-__version__ = '4.17.3'
+__version__ = '4.18.0'
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'change-me-in-production-8f3k2j')
@@ -96,6 +96,11 @@ def _run_migrations():
         ('customers',        'scanner',      'VARCHAR(32)'),
         ('customers',        'scanner_env',  'VARCHAR(128)'),
         ('customers',        'scanner_args', 'VARCHAR(256)'),
+        # v4.18.0 — dynamic remediation project scope
+        ('remediation_projects', 'scope_severities',   'VARCHAR(64)'),
+        ('remediation_projects', 'scope_group_id',     'INTEGER'),
+        ('remediation_projects', 'last_refresh_at',    'DATETIME'),
+        ('remediation_projects', 'last_refresh_added', 'INTEGER'),
     ]
 
     # Composite indexes. Every hot query filters on (scan_import_id, suppressed)
@@ -2050,6 +2055,19 @@ def projects():
     rows = q.order_by(desc(RemediationProject.created_at)).all()
 
     latest = _latest_import()
+
+    # Dynamic projects are refreshed here as well as on the detail page,
+    # otherwise the progress shown on this page describes whatever the project
+    # held the last time somebody opened it. The remediation rows are computed
+    # once and shared, rather than once per project.
+    dyn = [pr for pr in rows
+           if pr.project_type == 'dynamic' and pr.status == 'Open']
+    if dyn and latest:
+        _rr, _tr = _remediation_rows(latest.id)
+        shared = {r['plugin_id']: r for r in _rr}
+        for pr in dyn:
+            _refresh_dynamic_project(pr, latest.id, by_plugin=shared)
+
     cards = []
     for pr in rows:
         pids = [i.plugin_id for i in pr.items if i.plugin_id]
@@ -2063,7 +2081,10 @@ def projects():
         closed=sum(1 for c in cards if c['p'].display_status == 'Closed'),
     )
     return render_template('projects.html', cards=cards, counts=counts,
-                           status=status, today=datetime.utcnow().date())
+                           status=status,
+                           asset_groups=_cust_ag_q().order_by(AssetGroup.name).all(),
+                           severities=['Critical', 'High', 'Medium', 'Low'],
+                           today=datetime.utcnow().date())
 
 
 @app.route('/projects/create', methods=['POST'])
@@ -2092,6 +2113,8 @@ def project_create():
         name=name,
         description=request.form.get('description', '').strip() or None,
         project_type='dynamic' if request.form.get('project_type') == 'dynamic' else 'static',
+        scope_severities=','.join(request.form.getlist('scope_severities')) or None,
+        scope_group_id=request.form.get('scope_group_id', type=int) or None,
         due_date=due,
         owner_id=owner_id or None,
         created_by_id=current_user.id,
@@ -2135,6 +2158,90 @@ def _add_plugins_to_project(pr, plugin_ids):
     return added
 
 
+def _project_scope_plugin_ids(pr, import_id):
+    """
+    Plugin ids in the given import that match a dynamic project's criteria.
+
+    Mirrors the exclusions the remediation engine itself applies, so a project
+    never absorbs something the remediation page would not have offered:
+    suppressed findings and informational rows stay out.
+    """
+    if not import_id or not pr.has_scope_criteria:
+        return set()
+
+    q = (db.session.query(Vulnerability.plugin_id)
+         .filter(Vulnerability.scan_import_id == import_id,
+                 Vulnerability.suppressed == False,
+                 Vulnerability.risk_factor != 'Informational',
+                 Vulnerability.plugin_id.isnot(None)))
+
+    sevs = pr.severity_list
+    if sevs:
+        q = q.filter(Vulnerability.risk_factor.in_(sevs))
+
+    if pr.scope_group_id:
+        assets = [m.asset_name for m in
+                  AssetGroupMember.query.filter_by(group_id=pr.scope_group_id)]
+        if not assets:
+            # A group that has lost its members matches nothing, rather than
+            # quietly widening to the whole estate.
+            return set()
+        q = q.filter(Vulnerability.asset.in_(assets))
+
+    return {pid for (pid,) in q.distinct().all() if pid}
+
+
+def _refresh_dynamic_project(pr, import_id, by_plugin=None):
+    """
+    Bring an open dynamic project up to date with the latest import.
+
+    Two things happen: solutions already in the project have their scope counts
+    refreshed, and solutions newly matching the criteria are added. Nothing is
+    ever removed. A solution the scanner no longer sees is surfaced as awaiting
+    verification instead, because dropping it would discard its status, notes
+    and assignee along with the record that it was ever worked.
+    """
+    if pr.project_type != 'dynamic' or pr.status != 'Open' or not import_id:
+        return 0, 0
+
+    if by_plugin is None:
+        _rows, _tot = _remediation_rows(import_id)
+        by_plugin = {r['plugin_id']: r for r in _rows}
+
+    refreshed = 0
+    for i in pr.items:
+        r = by_plugin.get(i.plugin_id)
+        if r and (r.get('host_count') or 0) > (i.host_count or 0):
+            i.host_count    = r['host_count']
+            i.finding_count = r.get('finding_count') or i.finding_count
+            refreshed += 1
+
+    added = 0
+    if pr.has_scope_criteria:
+        existing = {i.plugin_id for i in pr.items}
+        matching = _project_scope_plugin_ids(pr, import_id)
+        for pid in sorted(matching - existing):
+            r = by_plugin.get(pid)
+            if not r:
+                continue
+            db.session.add(RemediationItem(
+                project_id=pr.id, plugin_id=pid,
+                plugin_name=r.get('plugin_name'), risk_factor=r.get('risk_factor'),
+                cvss_score=r.get('cvss3'), solution=r.get('solution'),
+                host_count=r.get('host_count') or 0,
+                finding_count=r.get('finding_count') or 0,
+            ))
+            added += 1
+
+    # Always record the check, including when nothing matched. Updating only on
+    # a change would leave a stale "added" count standing next to a fresh
+    # timestamp, which reads as though that work had just arrived.
+    pr.last_refresh_at    = datetime.utcnow()
+    pr.last_refresh_added = added
+    db.session.commit()
+    return refreshed, added
+
+
 @app.route('/projects/<int:project_id>')
 @login_required
 @customer_required
@@ -2142,19 +2249,8 @@ def project_detail(project_id):
     pr = _cust_rp_q().filter(RemediationProject.id == project_id).first() or abort(404)
     latest = _latest_import()
 
-    # Dynamic projects absorb newly discovered work on solutions already in scope.
-    if pr.project_type == 'dynamic' and pr.status == 'Open' and latest:
-        refreshed = 0
-        _rr, _tr = _remediation_rows(latest.id)
-        rows = {r['plugin_id']: r for r in _rr}
-        for i in pr.items:
-            r = rows.get(i.plugin_id)
-            if r and (r.get('host_count') or 0) > (i.host_count or 0):
-                i.host_count = r['host_count']
-                i.finding_count = r.get('finding_count') or i.finding_count
-                refreshed += 1
-        if refreshed:
-            db.session.commit()
+    # Dynamic projects refresh their counts and absorb newly matching work.
+    _refreshed, newly_added = _refresh_dynamic_project(pr, latest.id if latest else None)
 
     items = pr.items.order_by(desc(RemediationItem.cvss_score)).all()
     live = _live_plugin_counts(latest.id if latest else None,
@@ -2182,7 +2278,41 @@ def project_detail(project_id):
                            verifiable=verifiable,
                            trend_json=json.dumps(trend), trend_points=len(trend),
                            statuses=RemediationItem.STATUSES,
+                           newly_added=newly_added,
+                           asset_groups=_cust_ag_q().order_by(AssetGroup.name).all(),
+                           severities=['Critical', 'High', 'Medium', 'Low'],
                            today=datetime.utcnow().date())
+
+
+@app.route('/projects/<int:project_id>/scope', methods=['POST'])
+@login_required
+@analyst_required
+@customer_required
+def project_scope_update(project_id):
+    """Change what a project is, and what a dynamic one absorbs."""
+    pr = _cust_rp_q().filter(RemediationProject.id == project_id).first() or abort(404)
+    if pr.status != 'Open':
+        flash('A closed project cannot change its scope.', 'warning')
+        return redirect(url_for('project_detail', project_id=pr.id))
+
+    pr.project_type = ('dynamic' if request.form.get('project_type') == 'dynamic'
+                       else 'static')
+    sevs = [x for x in request.form.getlist('scope_severities')
+            if x in ('Critical', 'High', 'Medium', 'Low')]
+    pr.scope_severities = ','.join(sevs) or None
+    pr.scope_group_id   = request.form.get('scope_group_id', type=int) or None
+    db.session.commit()
+
+    latest = _latest_import()
+    _refreshed, added = _refresh_dynamic_project(pr, latest.id if latest else None)
+    if pr.project_type == 'dynamic' and not pr.has_scope_criteria:
+        flash('Scope saved. With no criteria set this project refreshes its '
+              'counts but will not take on new solutions.', 'warning')
+    elif added:
+        flash(f'Scope saved. {added} newly matching solution(s) added.', 'success')
+    else:
+        flash('Scope saved. Nothing new matched.', 'success')
+    return redirect(url_for('project_detail', project_id=pr.id))
 
 
 @app.route('/projects/<int:project_id>/items/<int:item_id>/update', methods=['POST'])

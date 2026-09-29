@@ -22,7 +22,12 @@
       </a>
       {% set ds = p.display_status %}
       <span class="badge {{ 'bg-success' if ds=='Open' else 'bg-danger' if ds=='Expired' else 'bg-secondary' }}">{{ ds }}</span>
-      <span class="badge bg-dark border border-secondary">{{ p.project_type|title }}</span>
+      <span class="badge bg-dark border border-secondary"
+            title="{{ p.scope_summary }}">{{ p.project_type|title }}</span>
+      {% if p.project_type == 'dynamic' and not p.has_scope_criteria %}
+      <span class="badge" style="background:#6a5a20;color:#e3c766;"
+            title="No criteria set, so nothing new is taken on">No criteria</span>
+      {% endif %}
     </div>
     <h4 class="fw-bold mb-0">{{ p.name }}</h4>
     {% if p.description %}<small class="text-secondary">{{ p.description }}</small>{% endif %}
@@ -42,6 +47,92 @@
     </form>
     {% endif %}
   </div>
+</div>
+
+{% if newly_added %}
+<div class="alert d-flex align-items-center gap-2 mb-4"
+     style="background:#0d2233;border:1px solid #1f6feb;color:#79c0ff;">
+  <i class="bi bi-arrow-repeat"></i>
+  <div class="small">
+    <strong>{{ '{:,}'.format(newly_added) }}</strong> newly discovered
+    solution{{ 's' if newly_added != 1 }} matched this project's criteria in the
+    latest scan and {{ 'have' if newly_added != 1 else 'has' }} been added.
+  </div>
+</div>
+{% endif %}
+
+<div class="card p-3 mb-4">
+  <div class="d-flex align-items-center justify-content-between gap-2 flex-wrap">
+    <div class="small">
+      <span class="text-secondary">Scope:</span>
+      <span class="text-white">{{ p.scope_summary }}</span>
+      {% if p.project_type == 'dynamic' and p.last_refresh_at %}
+      <span class="text-secondary ms-2">
+        last checked {{ p.last_refresh_at.strftime('%Y-%m-%d %H:%M') }} UTC
+      </span>
+      {% endif %}
+    </div>
+    {% if current_user.role in ('admin', 'analyst') and p.status == 'Open' %}
+    <button class="btn btn-sm btn-outline-secondary" data-bs-toggle="collapse"
+            data-bs-target="#scopeEditor">
+      <i class="bi bi-sliders me-1"></i>Edit scope
+    </button>
+    {% endif %}
+  </div>
+
+  {% if current_user.role in ('admin', 'analyst') and p.status == 'Open' %}
+  <div class="collapse mt-3" id="scopeEditor">
+    <form method="post" action="{{ url_for('project_scope_update', project_id=p.id) }}">
+      <div class="row g-3">
+        <div class="col-md-3">
+          <label class="form-label text-secondary small">Project type</label>
+          <select name="project_type" id="scopeType"
+                  class="form-select form-select-sm bg-dark border-secondary text-white"
+                  onchange="document.getElementById('scopeCriteria').style.display = this.value === 'dynamic' ? '' : 'none';">
+            <option value="static"  {% if p.project_type != 'dynamic' %}selected{% endif %}>Static</option>
+            <option value="dynamic" {% if p.project_type == 'dynamic' %}selected{% endif %}>Dynamic</option>
+          </select>
+        </div>
+        <div class="col-md-9" id="scopeCriteria"
+             {% if p.project_type != 'dynamic' %}style="display:none;"{% endif %}>
+          <div class="row g-3">
+            <div class="col-md-7">
+              <label class="form-label text-secondary small">Absorb new solutions of severity</label>
+              <div class="d-flex gap-3 flex-wrap">
+                {% for sev in severities %}
+                <div class="form-check">
+                  <input class="form-check-input" type="checkbox" name="scope_severities"
+                         value="{{ sev }}" id="sev{{ sev }}"
+                         {% if sev in p.severity_list %}checked{% endif %}>
+                  <label class="form-check-label small" for="sev{{ sev }}">{{ sev }}</label>
+                </div>
+                {% endfor %}
+              </div>
+            </div>
+            <div class="col-md-5">
+              <label class="form-label text-secondary small">Limit to asset group</label>
+              <select name="scope_group_id"
+                      class="form-select form-select-sm bg-dark border-secondary text-white">
+                <option value="">All assets</option>
+                {% for g in asset_groups %}
+                <option value="{{ g.id }}" {% if p.scope_group_id == g.id %}selected{% endif %}>{{ g.name }}</option>
+                {% endfor %}
+              </select>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="d-flex align-items-center gap-2 mt-3">
+        <button class="btn btn-sm btn-primary">Save scope</button>
+        <span class="text-secondary" style="font-size:.75rem;">
+          Saving re-checks the latest scan immediately. Solutions are never removed
+          by a scope change; anything the scanner stops seeing is offered for
+          verification instead, so its status and notes survive.
+        </span>
+      </div>
+    </form>
+  </div>
+  {% endif %}
 </div>
 
 {% if p.is_expired %}

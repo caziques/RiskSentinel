@@ -4,6 +4,20 @@ All notable changes to RiskSentinel (by Beyond Cyber) are documented here.
 
 ---
 
+## [4.18.0] - 2026-09-29
+### Added
+- **Dynamic remediation projects now absorb newly discovered work.** A project marked dynamic previously only refreshed host counts on solutions it already held, because no scope criteria were stored, so nothing new could ever join. It now carries criteria and re-evaluates them against each new scan.
+- Criteria are severity and, optionally, an asset group: "new Critical and High on Production servers". Both are set when creating a project and can be changed afterwards from the project page, which matters for projects created before this existed. Saving re-checks the latest scan immediately.
+- Matching mirrors the remediation engine's own exclusions, so a project never takes on something the remediation page would not have offered: suppressed findings and informational rows stay out.
+- The project page reports what arrived and when it last checked, and the projects list refreshes dynamic projects as well, since it shows progress from stored items and would otherwise describe whatever a project held the last time somebody opened it. The remediation rows are computed once and shared across projects rather than once each.
+
+### Behaviour worth knowing
+- **Nothing is ever removed.** Narrowing the criteria does not delete work already taken on, and a solution the scanner stops seeing is offered for verification as before, rather than vanishing along with its status, notes and assignee.
+- **A dynamic project with no criteria takes on nothing** and is badged as such, rather than silently pulling in the whole estate.
+- An asset group that has lost all its members matches nothing, rather than widening to every asset.
+
+---
+
 ## [4.17.3] - 2026-09-28
 ### Fixed
 - **The software inventory was empty for Cortex-backed customers.** Cortex does not emit CPE. It writes package URLs (`pkg:rpm/redhat/kernel@5.14.0`) and a shorter `app:sshd@8.7p1` form, both of which the CPE parser rejected outright, so the application inventory, the "Applications Detected" column, the applications chart and the `has=apps` filter were all blank for MCR while the page still parsed ~192,000 unusable rows on every load.
