@@ -4,6 +4,19 @@ All notable changes to RiskSentinel (by Beyond Cyber) are documented here.
 
 ---
 
+## [4.18.1] - 2026-09-29
+### Fixed
+- **A per-asset description was presented as the vulnerability's own.** The CVE and plugin pages showed the description from an arbitrary affected row under a plain "Description" heading. Cortex writes that text per finding, not per vulnerability, so for CVE-2026-47304 across 56 assets the page stated the flaw was "found on the Server PRD-VDC-INT02" — naming one host out of 56, chosen only by row order.
+- Where the text genuinely varies across affected assets, it is now headed **Example finding**, badged with the asset it came from, and carries a note that the wording differs elsewhere. Where every affected asset shares one description, as with Tenable and Rapid7, it is still shown plainly as "Description". Nothing about the import or the stored data changes; this is purely how it is presented.
+
+### Known Cortex data gaps
+Observed while reconciling MCR and recorded here so they are not rediscovered:
+- **7.7% of Cortex rows (22,069 of 287,764) carry no usable package identifier** — the purl arrives as `app:@`, with neither name nor version. The asset is flagged as affected with nothing actionable attached.
+- **No Cortex row carries an IP address**, all 287,764 of them. The `findings` dataset does not provide one and the separate asset-IP lookup does not reach these rows, so the IP column is empty for Cortex-backed customers.
+- **`cve_id` and `severity` live inside `normalized_fields`**, a JSON blob rather than an indexed column, which is why CVE-level aggregation on the Cortex side fails or times out at this volume while asset-level paging stays reliable.
+
+---
+
 ## [4.18.0] - 2026-09-29
 ### Added
 - **Dynamic remediation projects now absorb newly discovered work.** A project marked dynamic previously only refreshed host counts on solutions it already held, because no scope criteria were stored, so nothing new could ever join. It now carries criteria and re-evaluates them against each new scan.

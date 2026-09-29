@@ -17,7 +17,7 @@ from werkzeug.utils import secure_filename
 
 from models import db, User, Customer, UserCustomer, ScanImport, Vulnerability, NewsFeed, RiskAcceptance, AssetGroup, AssetGroupMember, RemediationProject, RemediationItem, RemediationSnapshot, SuppressionRule
 
-__version__ = '4.18.0'
+__version__ = '4.18.1'
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'change-me-in-production-8f3k2j')
@@ -2984,6 +2984,11 @@ def cve_detail(cve_id):
 
     sample    = direct[0]
     host_list = sorted({v.asset for v in direct})
+    # Some scanners, Cortex among them, write a description that describes one
+    # finding rather than the vulnerability: "...found on the Server PRD-VDC-INT02".
+    # Presenting an arbitrary row's text as the CVE's own names one host out of
+    # many. Detect that and label it honestly instead.
+    desc_varies = len({(v.description or '') for v in direct}) > 1
     host_rows = (db.session.query(
                     Vulnerability.asset,
                     Vulnerability.ip_address,
@@ -3031,6 +3036,7 @@ def cve_detail(cve_id):
     return render_template('cve_detail.html',
         cve_id=cve_id, cve_year=cve_year, cve_number=cve_number,
         sample=sample, cvss3=cvss3, cvss4=cvss4,
+        desc_varies=desc_varies,
         host_rows=host_rows, host_count=len(host_rows),
         instance_count=len(direct),
         related=related,
@@ -3180,6 +3186,13 @@ def plugin_detail(plugin_id):
     if not sample:
         abort(404)
 
+    # As on the CVE page: a per-finding description must not masquerade as the
+    # vulnerability's own. Counted in SQL rather than by loading every row.
+    desc_varies = (db.session.query(func.count(func.distinct(
+                       func.coalesce(Vulnerability.description, ''))))
+                   .filter_by(plugin_id=plugin_id, scan_import_id=import_id)
+                   .scalar() or 0) > 1
+
     # Aggregate stats for this plugin in this import
     stats = db.session.query(
         func.count(Vulnerability.asset.distinct()).label('host_count'),
@@ -3244,7 +3257,7 @@ def plugin_detail(plugin_id):
     } for h in hist]
 
     return render_template('plugin_detail.html',
-                           sample=sample,
+                           sample=sample, desc_varies=desc_varies,
                            stats=stats,
                            host_rows=host_rows,
                            port_rows=port_rows,

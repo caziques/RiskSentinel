@@ -75,8 +75,22 @@
 
     {% if sample.description %}
     <div class="card p-3 mb-3">
+      {% if desc_varies %}
+      <h6 class="text-secondary mb-2">
+        <i class="bi bi-file-text me-1"></i>Example finding
+        <span class="badge bg-dark border border-secondary ms-1" style="font-weight:400;">{{ sample.asset }}</span>
+      </h6>
+      <pre class="text-white mb-2" style="white-space:pre-wrap;font-family:inherit;font-size:.875rem;">{{ sample.description }}</pre>
+      <div class="text-secondary" style="font-size:.75rem;">
+        <i class="bi bi-info-circle me-1"></i>The scanner writes this text per affected
+        asset rather than for this vulnerability as a whole, so it describes
+        <strong>{{ sample.asset }}</strong> only. Wording differs on the other
+        affected assets listed below.
+      </div>
+      {% else %}
       <h6 class="text-secondary mb-2"><i class="bi bi-file-text me-1"></i>Description</h6>
       <pre class="text-white mb-0" style="white-space:pre-wrap;font-family:inherit;font-size:.875rem;">{{ sample.description }}</pre>
+      {% endif %}
     </div>
     {% endif %}
 
