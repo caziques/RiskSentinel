@@ -4,6 +4,21 @@ All notable changes to RiskSentinel (by Beyond Cyber) are documented here.
 
 ---
 
+## [4.19.0] - 2026-09-29
+### Changed
+- **The Cortex importer now fetches the whole dataset in one query.** Requesting more than 1,000 rows makes Cortex return a `stream_id` instead of the rows, and `get_query_results_stream` then delivers the complete result set. The previous code worked around the 1,000-row inline cap by partitioning the query per asset and paging each one.
+- Measured against MCR, 289,748 findings: **455 queries and 32 minutes became 1 query and 1 minute 45 seconds**, and quota charged per import fell from roughly 4.3 to **0.0178**. XQL queries are billed against a yearly quota, so this is a cost change as much as a speed one.
+- It is also **more accurate**. The streamed import reconciles to Cortex's own reported total exactly; the asset-partitioned one landed 1,984 short and saw 229 assets where the stream sees 232.
+- The asset-IP lookup uses the stream too, removing up to 50 further queries.
+- Removed with the rewrite: the thread pool, the three-worker concurrency limit, per-asset keyset pagination and the parallel-query back-pressure dance that existed only to work around the row cap. Retry on back-pressure is kept, since another job on the tenant can still trigger it.
+
+### Notes
+- The streamed payload is **gzipped twice**, once by the stream and again by the transport, so it is decompressed until it stops being gzip rather than to a fixed depth.
+- Small result sets still return inline with no `stream_id`, which is handled.
+- **`--days` has no effect on this dataset.** A 1-day and a 30-day window both return the same 289,748 rows, because active findings are re-reported continuously. The flag is kept for compatibility but cannot be used to make an import cheaper or incremental.
+
+---
+
 ## [4.18.1] - 2026-09-29
 ### Fixed
 - **A per-asset description was presented as the vulnerability's own.** The CVE and plugin pages showed the description from an arbitrary affected row under a plain "Description" heading. Cortex writes that text per finding, not per vulnerability, so for CVE-2026-47304 across 56 assets the page stated the flaw was "found on the Server PRD-VDC-INT02" — naming one host out of 56, chosen only by row order.

@@ -4,6 +4,14 @@ Palo Alto Cortex -> RiskSentinel direct importer.
 
 Reads the `findings` dataset via XQL. This is the model the Cortex console renders.
 
+The whole dataset arrives in ONE query. Requesting more than 1,000 rows makes
+Cortex return a stream_id rather than the rows, and get_query_results_stream then
+delivers the complete result set. An earlier version worked around the 1,000-row
+inline cap by partitioning the query per asset and paging each one, which cost
+455 queries and 32 minutes for 290k findings where the stream costs one query and
+about 80 seconds. Queries are charged against a quota, so this matters for money
+as well as time.
+
 IMPORTANT, learned the hard way: the legacy Cortex XDR datasets `va_cves` and
 `va_endpoints` still exist on new-platform tenants and still return internally
 consistent, freshly-calculated data, but they do NOT match what the console shows
@@ -23,8 +31,8 @@ Credentials (env or --env-file):
 """
 
 import argparse
+import gzip
 import json
-import threading
 import os
 import ssl
 import sys
@@ -32,15 +40,19 @@ import time
 import urllib.request
 import urllib.error
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 
 _SSL_CTX = ssl.create_default_context()
 
-# XQL returns at most this many rows per call and reports the cap as the total
-# rather than signalling truncation, so paginate by keyset on a unique field.
+# get_query_results returns at most this many rows inline and reports the cap as
+# the total rather than signalling truncation.
 PAGE_SIZE = 1000
+
+# Asking for more than PAGE_SIZE switches Cortex to the streaming route: the
+# reply carries a stream_id instead of data, and the whole result set is then
+# fetched in one go. This is the documented mechanism for large results.
+STREAM_LIMIT = 500000
 
 VULN_FILTER = ('xdm.finding.category = "VULNERABILITY" '
                'and xdm.finding.is_active = true')
@@ -75,9 +87,10 @@ from app import app, db, cvss_to_severity, resolve_severity, SEV_LEVEL, apply_su
 from models import ScanImport, Vulnerability
 
 
-# Cortex caps how many XQL queries may run at once and rejects the excess with a
-# 500. That is a back-pressure signal, not a failure, so wait and retry instead of
-# aborting the whole import.
+# Cortex caps how many XQL queries may run at once (four, per the API docs) and
+# rejects the excess with a 500. That is back-pressure, not a failure, so wait and
+# retry. The import now issues a handful of queries rather than hundreds, so this
+# should be rare, but another job on the same tenant can still trigger it.
 _BUSY = "parallel running queries"
 
 
@@ -107,22 +120,91 @@ def _post(path, body, timeout=300, attempts=8):
     raise SystemExit("ERROR: exhausted retries against the Cortex API")
 
 
-def xql(query, days=1, limit=PAGE_SIZE):
+def _run_query(query, days, limit):
+    """Start a query and wait for it. Returns the reply once it has finished."""
     started = _post("/public_api/v1/xql/start_xql_query/",
                     {"request_data": {"query": query, "tenants": [],
                                       "timeframe": {"relativeTime": int(days * 86400000)}}})
     qid = started.get("reply")
-    for _ in range(120):
+    for _ in range(900):
         rep = _post("/public_api/v1/xql/get_query_results/",
                     {"request_data": {"query_id": qid, "pending_flag": True,
                                       "limit": limit, "format": "json"}}).get("reply") or {}
         status = rep.get("status")
         if status in ("SUCCESS", "PARTIAL_SUCCESS"):
-            return (rep.get("results") or {}).get("data") or []
+            return rep
         if status == "FAIL":
             raise SystemExit(f"ERROR: XQL failed: {str(rep.get('error') or rep)[:300]}")
         time.sleep(0.4)
     raise SystemExit("ERROR: timed out waiting for XQL results")
+
+
+def xql(query, days=1, limit=PAGE_SIZE):
+    """A single page of results, for small queries such as counts."""
+    rep = _run_query(query, days, limit)
+    return (rep.get("results") or {}).get("data") or []
+
+
+def xql_stream(query, days=1, progress=None):
+    """
+    Every row of a result set, however large, in one query.
+
+    Asking for more than PAGE_SIZE rows makes Cortex return a stream_id in place
+    of the data, which get_query_results_stream then delivers in full. That is
+    the documented route for large results and it costs one query, where paging
+    the same data an asset at a time cost several hundred.
+    """
+    rep = _run_query(query, days, STREAM_LIMIT)
+    results = rep.get("results") or {}
+
+    # Small result sets still come back inline, so there is nothing to stream.
+    if results.get("data") is not None and not results.get("stream_id"):
+        return results["data"] or []
+
+    stream_id = results.get("stream_id")
+    if not stream_id:
+        return []
+    expected = rep.get("number_of_results") or 0
+    if progress:
+        progress(f"  streaming {expected:,} rows in one query "
+                 f"(cost {_cost_of(rep):.4f})")
+
+    body = json.dumps({"request_data": {"stream_id": stream_id,
+                                        "is_gzip_compressed": True}}).encode()
+    req = urllib.request.Request(
+        BASE_URL.rstrip("/") + "/public_api/v1/xql/get_query_results_stream/",
+        data=body,
+        headers={"x-xdr-auth-id": str(API_KEY_ID), "Authorization": API_KEY,
+                 "Content-Type": "application/json", "Accept-Encoding": "gzip"},
+        method="POST")
+    with urllib.request.urlopen(req, timeout=1800, context=_SSL_CTX) as r:
+        raw = r.read()
+
+    # The payload is gzipped by the stream itself and again by the transport,
+    # so peel until it stops being gzip rather than assuming a fixed depth.
+    while raw[:2] == b"\x1f\x8b":
+        raw = gzip.decompress(raw)
+    if progress:
+        progress(f"  received {len(raw) / 1048576:.0f} MB")
+
+    rows = []
+    for line in raw.decode("utf-8", "replace").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rows.append(json.loads(line))
+        except ValueError:
+            continue
+    if expected and len(rows) != expected:
+        print(f"  WARNING: stream returned {len(rows):,} rows, "
+              f"Cortex said {expected:,}", flush=True)
+    return rows
+
+
+def _cost_of(rep):
+    vals = list((rep.get("query_cost_charged") or {}).values())
+    return vals[0] if vals else 0.0
 
 
 def expected_total(days):
@@ -132,38 +214,23 @@ def expected_total(days):
 
 def fetch_asset_ips(days):
     """Asset name -> IP string, from asset_inventory. Best effort."""
-    out, cursor, page = {}, None, 0
-    while True:
-        page += 1
-        base = "dataset = asset_inventory"
-        flt = f' | filter xdm.asset.id > "{cursor}"' if cursor else ""
-        q = (f"{base}{flt} | fields xdm.asset.id, xdm.asset.name, xdm.asset.normalized_fields "
-             f"| sort asc xdm.asset.id | limit {PAGE_SIZE}")
-        try:
-            rows = xql(q, days)
-        except SystemExit:
-            return out
-        if not rows:
-            break
-        for r in rows:
-            name = r.get("xdm.asset.name")
-            if not name:
-                continue
-            nf = r.get("xdm.asset.normalized_fields") or {}
-            ips = (nf.get("xdm.host.ipv4_addresses")
-                   or nf.get("xdm.asset.ipv4_addresses") or [])
-            if isinstance(ips, str):
-                ips = [ips]
-            if ips:
-                out[name] = ", ".join(str(i) for i in ips)[:64]
-        if len(rows) < PAGE_SIZE:
-            break
-        nxt = rows[-1].get("xdm.asset.id")
-        if nxt == cursor:
-            break
-        cursor = nxt
-        if page >= 50:
-            break
+    out = {}
+    try:
+        rows = xql_stream("dataset = asset_inventory | fields xdm.asset.id, "
+                          "xdm.asset.name, xdm.asset.normalized_fields", days)
+    except (SystemExit, urllib.error.URLError, TimeoutError):
+        return out
+    for r in rows:
+        name = r.get("xdm.asset.name")
+        if not name:
+            continue
+        nf = r.get("xdm.asset.normalized_fields") or {}
+        ips = (nf.get("xdm.host.ipv4_addresses")
+               or nf.get("xdm.asset.ipv4_addresses") or [])
+        if isinstance(ips, str):
+            ips = [ips]
+        if ips:
+            out[name] = ", ".join(str(i) for i in ips)[:64]
     return out
 
 
@@ -324,57 +391,19 @@ def main():
               "xdm.finding.first_observed, xdm.finding.last_observed, "
               f"{NF}")
 
-    print("Fetching findings, partitioned by asset...", flush=True)
-    # One global "sort the whole dataset then take 1000" per page is quadratic:
-    # every page re-scans all findings. Partitioning by asset means each query
-    # sorts only that asset's rows, and the partitions run concurrently.
-    asset_rows = xql(f"dataset = findings | filter {VULN_FILTER} "
-                     f"| comp count() as n by xdm.finding.asset_name | sort desc n", args.days)
-    assets = [(r.get("xdm.finding.asset_name"), r.get("n") or 0)
-              for r in asset_rows if r.get("xdm.finding.asset_name")]
-    print(f"  {len(assets)} assets to fetch", flush=True)
-
-    def fetch_asset(name):
-        """All findings for one asset, keyset-paginated within that asset."""
-        safe = str(name).replace('"', '\\"')
-        out, cursor, guard = [], None, 0
-        while True:
-            guard += 1
-            flt = f' and xdm.finding.id > "{cursor}"' if cursor else ""
-            q = (f'dataset = findings | filter {VULN_FILTER} '
-                 f'and xdm.finding.asset_name = "{safe}"{flt} '
-                 f"| fields {FIELDS} | sort asc xdm.finding.id | limit {PAGE_SIZE}")
-            rows = xql(q, args.days)
-            if not rows:
-                break
-            out.extend(rows)
-            if len(rows) < PAGE_SIZE:
-                break
-            nxt = rows[-1].get("xdm.finding.id")
-            if nxt == cursor or guard > 60:
-                break
-            cursor = nxt
-        return out
+    print("Fetching all findings in a single streamed query...", flush=True)
+    rows = xql_stream(f"dataset = findings | filter {VULN_FILTER} | fields {FIELDS}",
+                      args.days, progress=lambda m: print(m, flush=True))
 
     records, seen_ids = [], set()
-    done = 0
-    lock = threading.Lock()
-    with ThreadPoolExecutor(max_workers=3) as pool:
-        futures = {pool.submit(fetch_asset, a): a for a, _ in assets}
-        for fut in as_completed(futures):
-            rows = fut.result()
-            with lock:
-                done += 1
-                for r in rows:
-                    fid = r.get("xdm.finding.id")
-                    if fid in seen_ids:
-                        continue
-                    seen_ids.add(fid)
-                    rec = build_record(r, ips, carried, now)
-                    if rec:
-                        records.append(rec)
-                if done % 20 == 0 or done == len(assets):
-                    print(f"  {done}/{len(assets)} assets, {len(records):,} findings", flush=True)
+    for r in rows:
+        fid = r.get("xdm.finding.id")
+        if fid in seen_ids:
+            continue
+        seen_ids.add(fid)
+        rec = build_record(r, ips, carried, now)
+        if rec:
+            records.append(rec)
 
     print(f"\nRetrieved {len(records):,} findings (Cortex reported {expected:,})")
     delta = len(records) - expected
