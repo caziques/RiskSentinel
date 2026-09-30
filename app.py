@@ -17,7 +17,7 @@ from werkzeug.utils import secure_filename
 
 from models import db, User, Customer, UserCustomer, ScanImport, Vulnerability, NewsFeed, RiskAcceptance, AssetGroup, AssetGroupMember, RemediationProject, RemediationItem, RemediationSnapshot, SuppressionRule
 
-__version__ = '4.19.0'
+__version__ = '4.20.0'
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'change-me-in-production-8f3k2j')
@@ -922,6 +922,7 @@ def vulnerabilities():
     show_suppressed = request.args.get('suppressed', 'false')
     search = request.args.get('search', '').strip()
     exclude_accepted = request.args.get('exclude_accepted', '0') == '1'
+    group_id = request.args.get('group', type=int)
     page = request.args.get('page', 1, type=int)
 
     latest = _latest_import()
@@ -937,6 +938,13 @@ def vulnerabilities():
         q = q.filter_by(risk_factor=severity)
     if asset_filter:
         q = q.filter(Vulnerability.asset.ilike(f'%{asset_filter}%'))
+    # Asset groups are membership lists rather than a column on the finding, so
+    # the filter is by name. A group with no members matches nothing rather than
+    # silently widening to the whole estate.
+    if group_id:
+        members = [m.asset_name for m in
+                   AssetGroupMember.query.filter_by(group_id=group_id)]
+        q = q.filter(Vulnerability.asset.in_(members or ['\x00_no_members']))
     if show_suppressed == 'false':
         q = q.filter_by(suppressed=False)
     elif show_suppressed == 'true':
@@ -962,6 +970,59 @@ def vulnerabilities():
     pagination = q.order_by(desc(Vulnerability.severity_level), desc(Vulnerability.cvss_v3_score)).paginate(
         page=page, per_page=100, error_out=False)
 
+    # Per-group breakdown for the "By asset group" section. Counted in SQL and
+    # scoped to the same import and suppression state as the table below, so the
+    # numbers agree with what clicking through actually shows.
+    groups = _cust_ag_q().order_by(AssetGroup.name).all()
+    group_rows, ungrouped = [], None
+    if import_id and groups:
+        base = Vulnerability.query.filter_by(scan_import_id=import_id)
+        if show_suppressed == 'false':
+            base = base.filter_by(suppressed=False)
+        elif show_suppressed == 'true':
+            base = base.filter_by(suppressed=True)
+
+        # Aggregate straight off the filtered query. An earlier version wrapped
+        # each count in "id IN (subquery)", which made this page 20x slower on a
+        # large tenant.
+        sev_filters = [Vulnerability.scan_import_id == import_id]
+        if show_suppressed == 'false':
+            sev_filters.append(Vulnerability.suppressed == False)
+        elif show_suppressed == 'true':
+            sev_filters.append(Vulnerability.suppressed == True)
+
+        grouped_assets = set()
+        for g in groups:
+            members = [m.asset_name for m in
+                       AssetGroupMember.query.filter_by(group_id=g.id)]
+            grouped_assets.update(members)
+            if not members:
+                group_rows.append(dict(g=g, members=0, total=0, sev={}, assets=0))
+                continue
+            rows = (db.session.query(Vulnerability.risk_factor,
+                                     func.count().label('n'),
+                                     func.count(Vulnerability.asset.distinct()).label('a'))
+                    .filter(*sev_filters, Vulnerability.asset.in_(members))
+                    .group_by(Vulnerability.risk_factor).all())
+            sev = {r.risk_factor: r.n for r in rows}
+            seen = (db.session.query(func.count(Vulnerability.asset.distinct()))
+                    .filter(*sev_filters, Vulnerability.asset.in_(members)).scalar() or 0)
+            group_rows.append(dict(g=g, members=len(members), sev=sev,
+                                   total=sum(sev.values()), assets=seen))
+
+        # Assets in this scan that belong to no group at all, so nothing is
+        # quietly invisible on a page whose whole purpose is grouping.
+        if grouped_assets:
+            nf = [~Vulnerability.asset.in_(grouped_assets)]
+            rows = (db.session.query(Vulnerability.risk_factor, func.count().label('n'))
+                    .filter(*sev_filters, *nf)
+                    .group_by(Vulnerability.risk_factor).all())
+            usev = {r.risk_factor: r.n for r in rows}
+            if sum(usev.values()):
+                ua = (db.session.query(func.count(Vulnerability.asset.distinct()))
+                      .filter(*sev_filters, *nf).scalar() or 0)
+                ungrouped = dict(sev=usev, total=sum(usev.values()), assets=ua)
+
     return render_template('vulnerabilities.html',
                            vulns=pagination.items,
                            pagination=pagination,
@@ -973,7 +1034,11 @@ def vulnerabilities():
                            show_suppressed=show_suppressed,
                            search=search,
                            exclude_accepted=exclude_accepted,
-                           accepted_count=accepted_count)
+                           accepted_count=accepted_count,
+                           group_rows=group_rows, ungrouped=ungrouped,
+                           group_id=group_id,
+                           current_group=(db.session.get(AssetGroup, group_id)
+                                          if group_id else None))
 
 
 @app.route('/vulnerabilities/<int:vuln_id>')

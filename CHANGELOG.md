@@ -4,6 +4,20 @@ All notable changes to RiskSentinel (by Beyond Cyber) are documented here.
 
 ---
 
+## [4.20.0] - 2026-09-30
+### Added
+- **View vulnerabilities by asset group.** A new section at the top of the Vulnerabilities page breaks the current scan down per asset group, with Critical / High / Medium / Low counts and the number of the group's assets actually seen in that scan. Clicking a group filters the table to it; the selection appears in the URL, so a grouped view can be linked and survives a reload.
+- The group filter composes with the existing severity, asset, search, suppression and scan filters rather than replacing them, and a **Clear group** control removes just that one.
+- A **Not in any group** row is included. Without it a page whose whole purpose is grouping would quietly hide every asset nobody has assigned yet.
+- A group whose members do not appear in the selected scan reports zero rather than matching everything, and the assets column reads "seen / members" so the difference is visible.
+
+### Notes
+- The breakdown counts obey the scan and suppression filters, so they agree with what clicking through actually shows.
+- The section is hidden entirely for customers with no asset groups defined.
+- Counts are aggregated directly off the filtered query. A first cut wrapped each count in an `id IN (subquery)`, which made the page roughly 20x slower on MCR (1,201ms against 390ms); that pattern is avoided.
+
+---
+
 ## [4.19.0] - 2026-09-29
 ### Changed
 - **The Cortex importer now fetches the whole dataset in one query.** Requesting more than 1,000 rows makes Cortex return a `stream_id` instead of the rows, and `get_query_results_stream` then delivers the complete result set. The previous code worked around the 1,000-row inline cap by partitioning the query per asset and paging each one.
