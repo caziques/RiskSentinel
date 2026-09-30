@@ -142,13 +142,17 @@
 <!-- Exclude accepted toggle -->
 <div class="d-flex align-items-center gap-3 mb-3">
   {% if exclude_accepted %}
-  <a href="?import_id={{ current_import_id }}&severity={{ severity }}&asset={{ asset_filter }}&suppressed={{ show_suppressed }}&search={{ search }}&exclude_accepted=0"
+  <a href="{{ url_for('vulnerabilities', import_id=current_import_id, group=group_id,
+                      severity=severity, asset=asset_filter, suppressed=show_suppressed,
+                      search=search, exclude_accepted='0') }}"
      class="btn btn-sm btn-warning">
     <i class="bi bi-shield-fill-check me-1"></i> Excluding Accepted Risk
     {% if accepted_count %}<span class="badge bg-dark ms-1">{{ accepted_count }}</span>{% endif %}
   </a>
   {% else %}
-  <a href="?import_id={{ current_import_id }}&severity={{ severity }}&asset={{ asset_filter }}&suppressed={{ show_suppressed }}&search={{ search }}&exclude_accepted=1"
+  <a href="{{ url_for('vulnerabilities', import_id=current_import_id, group=group_id,
+                      severity=severity, asset=asset_filter, suppressed=show_suppressed,
+                      search=search, exclude_accepted='1') }}"
      class="btn btn-sm btn-outline-secondary">
     <i class="bi bi-shield-check me-1"></i> Exclude Accepted Risk
   </a>
@@ -158,13 +162,19 @@
 <!-- Quick severity filters -->
 <div class="d-flex gap-2 mb-3">
   {% for s, color in [('Critical','danger'),('High','warning'),('Medium','info'),('Low','success')] %}
-  <a href="?import_id={{ current_import_id }}&severity={{ s }}&suppressed={{ show_suppressed }}"
+  <a href="{{ url_for('vulnerabilities', import_id=current_import_id, group=group_id,
+                      severity=(none if severity == s else s), asset=asset_filter,
+                      suppressed=show_suppressed, search=search,
+                      exclude_accepted='1' if exclude_accepted else '0') }}"
      class="btn btn-sm btn-outline-{{ color }} {% if severity == s %}active{% endif %}">
     {{ s }}
   </a>
   {% endfor %}
   {% if severity %}
-  <a href="?import_id={{ current_import_id }}&suppressed={{ show_suppressed }}" class="btn btn-sm btn-outline-secondary">Clear</a>
+  <a href="{{ url_for('vulnerabilities', import_id=current_import_id, group=group_id,
+                      asset=asset_filter, suppressed=show_suppressed, search=search,
+                      exclude_accepted='1' if exclude_accepted else '0') }}"
+     class="btn btn-sm btn-outline-secondary">Clear severity</a>
   {% endif %}
 </div>
 

@@ -4,6 +4,14 @@ All notable changes to RiskSentinel (by Beyond Cyber) are documented here.
 
 ---
 
+## [4.20.1] - 2026-09-30
+### Fixed
+- **Clicking a severity chip cleared the selected asset group.** The quick severity filters built their URL from scratch with only the scan, severity and suppression state, so every other active filter was discarded. The group was the visible casualty, but a search term, an asset filter and the exclude-accepted toggle were being silently dropped in the same way, which pre-dates the group feature.
+- The chips, the Clear control and the exclude-accepted toggles now carry the full filter state.
+- Clicking the active severity chip now clears it, rather than reloading the same view. The explicit control is relabelled **Clear severity**, since with a group filter present "Clear" was ambiguous about what it would clear.
+
+---
+
 ## [4.20.0] - 2026-09-30
 ### Added
 - **View vulnerabilities by asset group.** A new section at the top of the Vulnerabilities page breaks the current scan down per asset group, with Critical / High / Medium / Low counts and the number of the group's assets actually seen in that scan. Clicking a group filters the table to it; the selection appears in the URL, so a grouped view can be linked and survives a reload.
