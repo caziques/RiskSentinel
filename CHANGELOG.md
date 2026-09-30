@@ -4,6 +4,22 @@ All notable changes to RiskSentinel (by Beyond Cyber) are documented here.
 
 ---
 
+## [4.21.0] - 2026-09-30
+### Added
+- **View CVEs by asset group**, matching the Vulnerabilities page. A breakdown at the top of the CVE page gives each group's Critical / High / Medium / Low counts and the assets seen in the current scan; clicking a group filters the list, and the selection lives in the URL.
+- Counts are **unique CVEs**, not findings, since that is the unit this page deals in. The note under the table says so, and warns that the columns do not sum to the page totals: one CVE affecting hosts in two groups is counted in both.
+- A **Not in any group** row, and the same "seen / members" assets column as the Vulnerabilities page, so a group whose members are absent from the scan reads zero rather than matching everything.
+
+### Fixed
+- The CVE page's KPI cards, its Clear control, the scan selector and both chart click handlers rebuilt their URLs from scratch and would have dropped a selected group, the same defect fixed on the Vulnerabilities page in 4.20.1. They now carry it.
+- The Clear control is relabelled **Clear filters**, since alongside a group filter "Clear" did not say what it would clear.
+
+### Notes
+- The breakdown costs two queries per group rather than three. A first cut took MCR's CVE page from 283ms to 1,704ms with one group present; it is now 535ms.
+- Nebula records Tenable plugin identifiers rather than `CVE-` ids, so its CVE page is empty and the group section has nothing to show there. That is the data, not the feature.
+
+---
+
 ## [4.20.1] - 2026-09-30
 ### Fixed
 - **Clicking a severity chip cleared the selected asset group.** The quick severity filters built their URL from scratch with only the scan, severity and suppression state, so every other active filter was discarded. The group was the visible casualty, but a search term, an asset filter and the exclude-accepted toggle were being silently dropped in the same way, which pre-dates the group feature.

@@ -17,7 +17,7 @@ from werkzeug.utils import secure_filename
 
 from models import db, User, Customer, UserCustomer, ScanImport, Vulnerability, NewsFeed, RiskAcceptance, AssetGroup, AssetGroupMember, RemediationProject, RemediationItem, RemediationSnapshot, SuppressionRule
 
-__version__ = '4.20.1'
+__version__ = '4.21.0'
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'change-me-in-production-8f3k2j')
@@ -2914,6 +2914,7 @@ def cve_list():
     sev_filter     = request.args.get('severity', '')
     year_filter    = request.args.get('year', '', type=str)
     search         = request.args.get('search', '').strip()
+    group_id       = request.args.get('group', type=int)
 
     latest = _latest_import()
     if not latest:
@@ -2939,6 +2940,12 @@ def cve_list():
              Vulnerability.suppressed == False,
          ))
 
+    # Asset groups are membership lists rather than a column, so the filter is by
+    # name. A group with no members matches nothing rather than widening.
+    if group_id:
+        _members = [m.asset_name for m in
+                    AssetGroupMember.query.filter_by(group_id=group_id)]
+        q = q.filter(Vulnerability.asset.in_(_members or ['\x00_no_members']))
     if sev_filter:
         q = q.filter(Vulnerability.risk_factor == sev_filter)
     if year_filter:
@@ -3012,7 +3019,52 @@ def cve_list():
 
     all_imports = _cust_scan_q().order_by(desc(ScanImport.imported_at)).all()
 
+    # Per-group CVE breakdown. Counts distinct CVEs rather than findings, since
+    # that is the unit this page deals in, and follows the same import and
+    # suppression scope as the table so the numbers agree when clicked through.
+    groups = _cust_ag_q().order_by(AssetGroup.name).all()
+    group_rows, ungrouped = [], None
+    if groups:
+        gfilters = [Vulnerability.scan_import_id == current_import.id,
+                    Vulnerability.vulnerability_id.like('CVE-%'),
+                    Vulnerability.suppressed == False]
+        grouped_assets = set()
+        for g in groups:
+            members = [m.asset_name for m in
+                       AssetGroupMember.query.filter_by(group_id=g.id)]
+            grouped_assets.update(members)
+            if not members:
+                group_rows.append(dict(g=g, members=0, total=0, sev={}, assets=0))
+                continue
+            scope = [*gfilters, Vulnerability.asset.in_(members)]
+            rows = (db.session.query(Vulnerability.risk_factor,
+                                     func.count(func.distinct(Vulnerability.vulnerability_id)))
+                    .filter(*scope).group_by(Vulnerability.risk_factor).all())
+            sev = {rf: n for rf, n in rows}
+            # One pass for both totals rather than a query each.
+            uniq, seen = (db.session.query(
+                              func.count(func.distinct(Vulnerability.vulnerability_id)),
+                              func.count(func.distinct(Vulnerability.asset)))
+                          .filter(*scope).one())
+            group_rows.append(dict(g=g, members=len(members), sev=sev,
+                                   total=uniq or 0, assets=seen or 0))
+
+        if grouped_assets:
+            scope = [*gfilters, ~Vulnerability.asset.in_(grouped_assets)]
+            rows = (db.session.query(Vulnerability.risk_factor,
+                                     func.count(func.distinct(Vulnerability.vulnerability_id)))
+                    .filter(*scope).group_by(Vulnerability.risk_factor).all())
+            usev = {rf: n for rf, n in rows}
+            if usev:
+                ut, ua = (db.session.query(
+                              func.count(func.distinct(Vulnerability.vulnerability_id)),
+                              func.count(func.distinct(Vulnerability.asset)))
+                          .filter(*scope).one())
+                ungrouped = dict(sev=usev, total=ut or 0, assets=ua or 0)
+
     return render_template('cves.html',
+        group_rows=group_rows, ungrouped=ungrouped, group_id=group_id,
+        current_group=(db.session.get(AssetGroup, group_id) if group_id else None),
         no_data=False, latest=current_import, all_imports=all_imports,
         current_import_id=current_import.id,
         cve_rows=(cve_rows_all if cve_row_limit == 0 else cve_rows_all[:cve_row_limit]),

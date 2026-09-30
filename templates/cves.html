@@ -25,7 +25,7 @@
     <small class="text-secondary">{{ latest.report_date }} · {{ cve_rows|length }} CVEs in this scan</small>
   </div>
   <select class="form-select form-select-sm" style="width:auto;"
-          onchange="window.location='?import_id='+this.value">
+          onchange="window.location='{{ url_for('cve_list', group=group_id) }}{{ '&' if group_id else '?' }}import_id='+this.value">
     {% for imp in all_imports %}
     <option value="{{ imp.id }}" {% if imp.id == current_import_id %}selected{% endif %}>
       {{ imp.report_date or imp.imported_at.strftime('%Y-%m-%d') }}
@@ -44,7 +44,7 @@
     </div>
   </div>
   <div class="col-6 col-md-4 col-lg-2">
-    <a href="?import_id={{ current_import_id }}&severity=Critical" class="text-decoration-none">
+    <a href="{{ url_for('cve_list', import_id=current_import_id, group=group_id, severity='Critical') }}" class="text-decoration-none">
       <div class="card kpi-card h-100 p-3 text-center" style="border-color:#da3633;">
         <div class="text-secondary small mb-1">Critical + High</div>
         <div class="display-5 fw-bold" style="color:#da3633;">{{ '{:,}'.format(critical_high) }}</div>
@@ -60,7 +60,7 @@
     </div>
   </div>
   <div class="col-6 col-md-4 col-lg-2">
-    <a href="?import_id={{ current_import_id }}&severity=Critical&year=" class="text-decoration-none">
+    <a href="{{ url_for('cve_list', import_id=current_import_id, group=group_id, severity='Critical') }}" class="text-decoration-none">
       <div class="card kpi-card h-100 p-3 text-center" style="border-color:#1f6feb;">
         <div class="text-secondary small mb-1">With CVSS Score</div>
         <div class="display-5 fw-bold" style="color:#1f6feb;">{{ '{:,}'.format(with_cvss) }}</div>
@@ -119,10 +119,85 @@
   </div>
 </div>
 
+{% if group_rows %}
+<!-- By asset group -->
+<div class="card mb-3">
+  <div class="p-3 border-bottom d-flex align-items-center justify-content-between"
+       style="border-color:#30363d!important;">
+    <h6 class="mb-0 text-secondary">
+      <i class="bi bi-collection me-1"></i>By asset group
+      {% if current_group %}
+      <span class="badge ms-1" style="background:{{ current_group.color or '#1f6feb' }};">{{ current_group.name }}</span>
+      {% endif %}
+    </h6>
+    <div class="d-flex align-items-center gap-2">
+      {% if group_id %}
+      <a href="{{ url_for('cve_list', import_id=current_import_id, severity=sev_filter,
+                          year=year_filter, search=search, limit=row_limit) }}"
+         class="btn btn-sm btn-outline-secondary py-0 px-2"><i class="bi bi-x"></i> Clear group</a>
+      {% endif %}
+      <button class="btn btn-sm btn-outline-secondary py-0 px-2" data-bs-toggle="collapse"
+              data-bs-target="#cveGroupBreakdown"><i class="bi bi-chevron-expand"></i></button>
+    </div>
+  </div>
+  <div class="collapse show" id="cveGroupBreakdown">
+    <div class="table-responsive">
+      <table class="table table-sm table-hover mb-0">
+        <thead>
+          <tr>
+            <th>Group</th><th class="text-end">Assets</th>
+            <th class="text-end">Critical</th><th class="text-end">High</th>
+            <th class="text-end">Medium</th><th class="text-end">Low</th>
+            <th class="text-end">Unique CVEs</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for r in group_rows %}
+        <tr style="cursor:pointer;{% if group_id == r.g.id %}background:#1f6feb18;{% endif %}"
+            onclick="window.location='{{ url_for('cve_list', import_id=current_import_id,
+                       group=r.g.id, severity=sev_filter, year=year_filter,
+                       search=search, limit=row_limit) }}'">
+          <td>
+            <span class="badge me-1" style="background:{{ r.g.color or '#1f6feb' }};">&nbsp;</span>
+            <span class="text-white">{{ r.g.name }}</span>
+            {% if not r.members %}<span class="text-secondary small ms-1">(no members)</span>{% endif %}
+          </td>
+          <td class="text-end text-secondary">{{ '{:,}'.format(r.assets) }} / {{ '{:,}'.format(r.members) }}</td>
+          <td class="text-end">{% if r.sev.get('Critical') %}<span class="badge sev-badge-Critical">{{ '{:,}'.format(r.sev['Critical']) }}</span>{% else %}<span class="text-secondary">0</span>{% endif %}</td>
+          <td class="text-end">{% if r.sev.get('High') %}<span class="badge sev-badge-High">{{ '{:,}'.format(r.sev['High']) }}</span>{% else %}<span class="text-secondary">0</span>{% endif %}</td>
+          <td class="text-end text-secondary">{{ '{:,}'.format(r.sev.get('Medium', 0)) }}</td>
+          <td class="text-end text-secondary">{{ '{:,}'.format(r.sev.get('Low', 0)) }}</td>
+          <td class="text-end fw-bold text-white">{{ '{:,}'.format(r.total) }}</td>
+        </tr>
+        {% endfor %}
+        {% if ungrouped %}
+        <tr style="border-top:2px solid #30363d;">
+          <td class="text-secondary"><em>Not in any group</em></td>
+          <td class="text-end text-secondary">{{ '{:,}'.format(ungrouped.assets) }}</td>
+          <td class="text-end">{% if ungrouped.sev.get('Critical') %}<span class="badge sev-badge-Critical">{{ '{:,}'.format(ungrouped.sev['Critical']) }}</span>{% else %}<span class="text-secondary">0</span>{% endif %}</td>
+          <td class="text-end">{% if ungrouped.sev.get('High') %}<span class="badge sev-badge-High">{{ '{:,}'.format(ungrouped.sev['High']) }}</span>{% else %}<span class="text-secondary">0</span>{% endif %}</td>
+          <td class="text-end text-secondary">{{ '{:,}'.format(ungrouped.sev.get('Medium', 0)) }}</td>
+          <td class="text-end text-secondary">{{ '{:,}'.format(ungrouped.sev.get('Low', 0)) }}</td>
+          <td class="text-end text-secondary">{{ '{:,}'.format(ungrouped.total) }}</td>
+        </tr>
+        {% endif %}
+        </tbody>
+      </table>
+    </div>
+    <div class="p-2 text-secondary" style="font-size:.75rem;">
+      Unique CVEs per group, so the columns do not sum to the totals above: one CVE
+      on hosts in two groups is counted in both.
+      <a href="{{ url_for('asset_groups_list') }}" class="text-decoration-none">Manage groups</a>
+    </div>
+  </div>
+</div>
+{% endif %}
+
 <!-- Filter bar -->
 <div class="card p-3 mb-3">
   <form method="get" class="row g-2 align-items-end">
     <input type="hidden" name="import_id" value="{{ current_import_id }}">
+    {% if group_id %}<input type="hidden" name="group" value="{{ group_id }}">{% endif %}
     <div class="col-md-3">
       <label class="form-label small text-secondary mb-1">Search CVE / Description</label>
       <input type="text" name="search" class="form-control form-control-sm"
@@ -149,7 +224,8 @@
     <div class="col-auto d-flex gap-2">
       <button type="submit" class="btn btn-sm btn-primary">Filter</button>
       {% if sev_filter or year_filter or search %}
-      <a href="?import_id={{ current_import_id }}" class="btn btn-sm btn-outline-secondary">Clear</a>
+      <a href="{{ url_for('cve_list', import_id=current_import_id, group=group_id) }}"
+         class="btn btn-sm btn-outline-secondary">Clear filters</a>
       {% endif %}
     </div>
   </form>
@@ -261,6 +337,8 @@ const sevDist     = {{ sev_dist_json|safe }};
 const yearDist    = {{ year_dist_json|safe }};
 const cvssBuckets = {{ cvss_buckets_json|safe }};
 const importId    = {{ current_import_id }};
+// Keep the asset-group selection when a chart or KPI navigates.
+const GROUP_Q = {{ (('&group=' ~ group_id) if group_id else '') | tojson }};
 
 // ── Top 15 horizontal bar ─────────────────────────────────────────────────────
 const SEV_COLOR = { Critical:'#da3633', High:'#d29922', Medium:'#1f6feb', Low:'#238636', None:'#6e7681' };
@@ -321,7 +399,7 @@ document.getElementById('sevChart').onclick = function(e) {
   const pts = sevChart.getElementsAtEventForMode(e,'nearest',{intersect:true},true);
   if (pts.length) {
     const sev = Object.keys(sevDist)[pts[0].index];
-    window.location = '?import_id=' + importId + '&severity=' + sev;
+    window.location = '?import_id=' + importId + GROUP_Q + '&severity=' + sev;
   }
 };
 
@@ -355,7 +433,7 @@ document.getElementById('yearChart').onclick = function(e) {
   const pts = yearChart.getElementsAtEventForMode(e,'nearest',{intersect:true},true);
   if (pts.length) {
     const yr = yearKeys[pts[0].index];
-    window.location = '?import_id=' + importId + '&year=' + yr;
+    window.location = '?import_id=' + importId + GROUP_Q + '&year=' + yr;
   }
 };
 
@@ -382,7 +460,7 @@ new Chart(document.getElementById('cvssChart'), {
 });
 
 function clearFilters() {
-  window.location = '?import_id=' + importId;
+  window.location = '?import_id=' + importId + GROUP_Q;
 }
 
 // ── DataTable ────────────────────────────────────────────────────────────────
