@@ -23,6 +23,9 @@ class Customer(db.Model):
     SCANNERS = {
         'levelblue': ('LevelBlue / USM Anywhere', 'levelblue_import.py'),
         'cortex':    ('Palo Alto Cortex',         'cortex_import.py'),
+        # Legacy VA model, for tenants whose `findings` dataset is still empty.
+        # See the warning at the top of cortex_va_import.py before choosing it.
+        'cortex_va': ('Palo Alto Cortex (legacy VA)', 'cortex_va_import.py'),
     }
 
     @property

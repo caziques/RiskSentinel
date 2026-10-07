@@ -4,6 +4,24 @@ All notable changes to RiskSentinel (by Beyond Cyber) are documented here.
 
 ---
 
+## [4.22.0] - 2026-10-07
+### Added
+- **`cortex_va_import.py`** — a second Cortex importer for tenants whose vulnerability data sits in the legacy `va_cves` dataset rather than the new-platform `findings` dataset. Built for the **MotusCR** tenant, which MCR is migrating to: same new platform and XDM schema, but `findings` is still empty while `va_cves` is populated.
+- Selectable as **Palo Alto Cortex (legacy VA)** under Admin > Customers, so the Update-API button drives it like any other scanner.
+- New **MotusCR** customer, imported: 2,235 CVEs expanded into **15,086 host findings** across 17 assets (502 Critical, 11,571 High, 3,006 Medium, 7 Low). Reconciles exactly to `sum(affected_hosts_count)` measured independently on the tenant.
+- Uses the same streaming query path as `cortex_import.py`, so the whole dataset costs one query: 0.0004 compute units, about 75 seconds.
+
+### Deliberate behaviour
+- **`va_cves` is CVE-grain**, carrying `affected_hosts` as an array; the importer expands it to one finding per host. There is no package identifier and no CVSS vector in this dataset, only `severity` and `severity_score`, so the per-host software detail available from `findings` does not exist here.
+- `first_seen` is carried forward from prior imports where known, then falls back to the CVE's publication date rather than today, so age and SLA tracking do not reset on first import.
+- A CVE marked `is_excluded` in Cortex is imported **suppressed rather than dropped**, so the tenant's own dismissal stays visible and reviewable in RiskSentinel.
+- **The importer refuses to be silently wrong**: it probes `findings` first and prints a prominent warning if that dataset now has data, pointing at `cortex_import.py`.
+
+### Warning recorded in the file
+On the old MCR tenant both datasets were populated and disagreed: `va_cves` was internally consistent and freshly calculated, yet understated the real position by roughly 70% and attributed findings to hosts the console reported clean. `findings` is authoritative wherever it has data. This importer is for tenants where `findings` is empty, and should be abandoned for `cortex_import.py` as soon as it populates.
+
+---
+
 ## [4.21.0] - 2026-09-30
 ### Added
 - **View CVEs by asset group**, matching the Vulnerabilities page. A breakdown at the top of the CVE page gives each group's Critical / High / Medium / Low counts and the assets seen in the current scan; clicking a group filters the list, and the selection lives in the URL.
