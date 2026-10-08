@@ -4,6 +4,24 @@ All notable changes to RiskSentinel (by Beyond Cyber) are documented here.
 
 ---
 
+## [4.23.0] - 2026-10-08
+### Added
+- **`levelblue_groups.py`** — syncs USM Anywhere asset groups into RiskSentinel, so the per-group views added in 4.20.0 and 4.21.0 work against groupings that are actually maintained rather than hand-built here.
+- **Static groups with members only, by default.** Static groups are curated by hand in USM and carry intent. The dynamic ones are RSQL rules that mostly restate filters the portal already applies, and one of them ("Windows Assets") holds 1,010 of the tenant's 1,024 assets, so syncing them would bury everything useful. `--include-dynamic` takes them anyway. Empty groups are always skipped: USM carries unused PCI DSS and HIPAA shells with no members.
+- Nebula's first sync: **8 groups created, 1 updated, 185 members added, none removed** — DC-Servers (101), End OF Support (29), RDWeb (21), Nike Servers (19), NewSage (7), INV-110924 (6), Sage Servers (5), Riverfields (5), INV-040924 (2).
+- `--dry-run` reports exactly what would change and rolls back. `--prune` removes previously synced groups USM no longer has; off by default, so a sync never deletes on its own.
+
+### Detail that matters
+- Member names are taken from each asset's `name` field, matching exactly how `levelblue_import.py` names assets on the findings it writes. Using `fqdn` instead would have produced groups that silently matched nothing.
+- **`AssetGroup.name` is unique per install rather than per customer.** A group whose name another customer already owns is reported and skipped, never renamed or reassigned. This is a latent multi-tenancy weakness in the schema, not something the sync introduces.
+- The sync reports where USM's stated member count disagrees with what it resolved. Nebula's "Nike Servers" states 20 and resolves 19, so the number shown is the one actually matched.
+- RiskSentinel's existing "Nike Servers" turned out to be a perfect subset of USM's, missing 9 assets, so nothing local had to be reconciled.
+
+### Also fixed
+- USM's 2.0 API answers **500 to every endpoint** when sent an explicit `Accept: application/json` header, including endpoints that plainly work. The sync sends only `Authorization`, as `levelblue_import.py` does. Noted here because it reads as a tenant outage and is not.
+
+---
+
 ## [4.22.0] - 2026-10-07
 ### Added
 - **`cortex_va_import.py`** — a second Cortex importer for tenants whose vulnerability data sits in the legacy `va_cves` dataset rather than the new-platform `findings` dataset. Built for the **MotusCR** tenant, which MCR is migrating to: same new platform and XDM schema, but `findings` is still empty while `va_cves` is populated.
