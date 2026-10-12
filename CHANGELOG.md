@@ -4,6 +4,19 @@ All notable changes to RiskSentinel (by Beyond Cyber) are documented here.
 
 ---
 
+## [4.24.0] - 2026-10-12
+### Added
+- **`--exclude-groups` on the legacy Cortex importer.** Cortex endpoint groups can now be left out of an import, e.g. `--exclude-groups "EC WORKSTATIONS"`. `va_cves` carries no notion of groups, so membership is read from the `endpoints` dataset and hosts are filtered as the CVE rows are expanded.
+- Applied to MotusCR: **51,595 of 163,513 findings excluded** across 45 workstation hosts, leaving 111,918 on 225 assets. Persisted in the customer's scanner arguments, so the Update-API button and any schedule apply it without anyone remembering the flag.
+
+### Deliberate behaviour
+- Group names are stripped and matched case-insensitively, so a trailing space does not silently match nothing.
+- A group name that matches no endpoint prints a warning rather than passing quietly, since a typo would otherwise exclude nothing and look like it worked.
+- **If group membership cannot be read, the import aborts.** Carrying on would import the very hosts the operator asked to exclude.
+- Verified before building: host names in `va_cves.affected_hosts` match `endpoints.endpoint_name` for all 269 hosts, so the exclusion actually bites.
+
+---
+
 ## [4.23.0] - 2026-10-08
 ### Added
 - **`levelblue_groups.py`** — syncs USM Anywhere asset groups into RiskSentinel, so the per-group views added in 4.20.0 and 4.21.0 work against groupings that are actually maintained rather than hand-built here.

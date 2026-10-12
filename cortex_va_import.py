@@ -186,6 +186,31 @@ def ms_to_dt(ms):
         return None
 
 
+def fetch_endpoint_groups(days):
+    """
+    endpoint name -> set of Cortex group names.
+
+    From the `endpoints` dataset, which carries membership, type and IP while
+    va_cves carries none of them. Host names match va_cves.affected_hosts
+    exactly, verified against this tenant.
+    """
+    out = {}
+    try:
+        rows = xql_stream("dataset = endpoints | fields endpoint_name, "
+                          "endpoint_type, group_names", days)
+    except (SystemExit, urllib.error.URLError, TimeoutError):
+        return out
+    for r in rows:
+        name = (r.get("endpoint_name") or "").strip()
+        if not name:
+            continue
+        groups = r.get("group_names") or []
+        if isinstance(groups, str):
+            groups = [groups]
+        out[name] = {str(g).strip() for g in groups if str(g).strip()}
+    return out
+
+
 def fetch_asset_ips(days):
     """Asset name -> IP string, best effort."""
     out = {}
@@ -302,6 +327,9 @@ def main():
     p.add_argument("--customer", default=os.environ.get("PORTAL_CUSTOMER", ""))
     p.add_argument("--env-file", default="")
     p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--exclude-groups", default="",
+                   help="comma-separated Cortex endpoint groups to leave out, "
+                        "e.g. \"EC WORKSTATIONS\". Matched case-insensitively.")
     args = p.parse_args()
 
     global BASE_URL, API_KEY_ID, API_KEY
@@ -356,13 +384,36 @@ def main():
     ips = fetch_asset_ips(args.days)
     print(f"  {len(ips)} assets with IP data", flush=True)
 
+    # Group exclusions. va_cves has no notion of groups, so membership comes
+    # from the `endpoints` dataset and hosts are filtered as they are expanded.
+    excluded_names = [g.strip() for g in args.exclude_groups.split(",") if g.strip()]
+    excluded_hosts = set()
+    if excluded_names:
+        wanted = {g.upper() for g in excluded_names}
+        print(f"Excluding group(s): {', '.join(excluded_names)}", flush=True)
+        ep_groups = fetch_endpoint_groups(args.days)
+        if not ep_groups:
+            raise SystemExit("ERROR: could not read endpoint group membership, so the "
+                             "exclusion cannot be applied. Refusing to import "
+                             "everything silently.")
+        for host, groups in ep_groups.items():
+            if {g.upper() for g in groups} & wanted:
+                excluded_hosts.add(host)
+        print(f"  {len(ep_groups)} endpoints known, "
+              f"{len(excluded_hosts)} in the excluded group(s)", flush=True)
+        unmatched = wanted - {g.upper() for gs in ep_groups.values() for g in gs}
+        if unmatched:
+            # A typo here would silently exclude nothing, so name it.
+            print(f"  WARNING: no endpoint belongs to: {', '.join(sorted(unmatched))}",
+                  flush=True)
+
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     print("Fetching CVEs in a single streamed query...", flush=True)
     cves = xql_stream("dataset = va_cves", args.days,
                       progress=lambda m: print(m, flush=True))
 
     records, seen = [], set()
-    no_hosts = 0
+    no_hosts = excluded_pairs = 0
     for r in cves:
         hosts = r.get("affected_hosts") or []
         if isinstance(hosts, str):
@@ -371,7 +422,11 @@ def main():
             no_hosts += 1
             continue
         for h in hosts:
-            key = (str(h).strip(), (r.get("name") or "").strip())
+            host = str(h).strip()
+            if host in excluded_hosts:
+                excluded_pairs += 1
+                continue
+            key = (host, (r.get("name") or "").strip())
             if key in seen:
                 continue
             seen.add(key)
@@ -380,6 +435,9 @@ def main():
                 records.append(rec)
 
     print(f"\nExpanded {len(cves):,} CVEs into {len(records):,} host findings")
+    if excluded_pairs:
+        print(f"  {excluded_pairs:,} finding(s) left out, on "
+              f"{len(excluded_hosts)} excluded host(s)")
     if no_hosts:
         print(f"  {no_hosts:,} CVE(s) listed no affected host and were skipped")
     if expected and len(cves) != expected:
