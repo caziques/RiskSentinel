@@ -4,6 +4,21 @@ All notable changes to RiskSentinel (by Beyond Cyber) are documented here.
 
 ---
 
+## [4.25.0] - 2026-10-12
+### Added
+- **`--exclude-types` on the legacy Cortex importer**, e.g. `--exclude-types WORKSTATION`. Asset type is a property of the machine, so this keeps working however the rollout names or organises its endpoint groups. Accepts `WORKSTATION` or `TYPE_WORKSTATION`.
+- **Findings are now enriched from the `endpoints` dataset**: IP address, asset type, operating system and internet-facing status. `ip_address` goes from **0% to 100% populated** for this tenant — the `va_cves` and `findings` datasets carry no address at all, so this is the only place the portal can get one. Asset type lands as a `type=Server` / `type=Workstation` label, and `network_location` ending in EXTERNAL adds an `internet-facing` label.
+- The `asset_inventory` IP lookup is now a fallback that runs only when `endpoints` yields no addresses. It does not resolve for these hosts, so querying it as well was wasted work.
+
+### Why type-based rather than group-based
+MotusCR is taking roughly 1,000 additional licences, **all for workstations**. The group rule added in 4.24.0 matches on group name, so workstations placed in a new or differently named group — or left ungrouped — would have imported silently, with no error and nothing to notice but unexplained growth. Both rules were verified to select exactly the same 45 hosts and 51,595 findings today, so the swap is equivalent now and safe later. MotusCR is switched to `--exclude-types WORKSTATION`.
+
+### Guards
+- A type that matches no endpoint warns and lists the types actually present, rather than passing quietly.
+- If endpoint detail cannot be read at all, the import aborts rather than importing the hosts the operator asked to leave out. This now covers both exclusion kinds.
+
+---
+
 ## [4.24.0] - 2026-10-12
 ### Added
 - **`--exclude-groups` on the legacy Cortex importer.** Cortex endpoint groups can now be left out of an import, e.g. `--exclude-groups "EC WORKSTATIONS"`. `va_cves` carries no notion of groups, so membership is read from the `endpoints` dataset and hosts are filtered as the CVE rows are expanded.

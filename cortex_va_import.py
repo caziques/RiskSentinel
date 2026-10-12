@@ -22,6 +22,10 @@ Shape of the data, which differs from cortex_import.py in ways that matter:
   * `is_excluded` marks CVEs the tenant has dismissed; those are imported as
     suppressed rather than dropped, so they stay visible for review.
 
+Exclusions: prefer --exclude-types for whole classes of machine. A group-based
+rule depends on the rollout naming its groups consistently, and a new group of
+workstations would import silently; a type-based rule cannot miss them.
+
 Usage:
     python3 cortex_va_import.py --env-file .env.cortex.motuscr --customer MotusCR
     python3 cortex_va_import.py --env-file .env.cortex.motuscr --customer MotusCR --dry-run
@@ -186,18 +190,28 @@ def ms_to_dt(ms):
         return None
 
 
-def fetch_endpoint_groups(days):
-    """
-    endpoint name -> set of Cortex group names.
+TYPE_LABEL = {"TYPE_SERVER": "Server", "TYPE_WORKSTATION": "Workstation",
+              "TYPE_MOBILE": "Mobile", "TYPE_CONTAINER": "Container"}
 
-    From the `endpoints` dataset, which carries membership, type and IP while
-    va_cves carries none of them. Host names match va_cves.affected_hosts
-    exactly, verified against this tenant.
+
+def fetch_endpoints(days):
+    """
+    endpoint name -> {groups, type, ip, os, platform, internet_facing}.
+
+    One query against the `endpoints` dataset, which carries group membership,
+    asset type, IP addresses, OS and network location. va_cves carries none of
+    those, and the `findings` dataset has no IP either, so this is the only
+    place the portal can get them for a Cortex tenant.
+
+    Host names here match va_cves.affected_hosts exactly, verified on this
+    tenant for all 269 hosts. Matching on anything else would enrich nothing.
     """
     out = {}
     try:
-        rows = xql_stream("dataset = endpoints | fields endpoint_name, "
-                          "endpoint_type, group_names", days)
+        rows = xql_stream(
+            "dataset = endpoints | fields endpoint_name, endpoint_type, "
+            "group_names, ip_address, operating_system, platform, "
+            "network_location", days)
     except (SystemExit, urllib.error.URLError, TimeoutError):
         return out
     for r in rows:
@@ -207,7 +221,19 @@ def fetch_endpoint_groups(days):
         groups = r.get("group_names") or []
         if isinstance(groups, str):
             groups = [groups]
-        out[name] = {str(g).strip() for g in groups if str(g).strip()}
+        ips = r.get("ip_address") or []
+        if isinstance(ips, str):
+            ips = [ips]
+        loc = (r.get("network_location") or "").upper()
+        out[name] = dict(
+            groups={str(g).strip() for g in groups if str(g).strip()},
+            type=TYPE_LABEL.get(r.get("endpoint_type") or "",
+                                (r.get("endpoint_type") or "").replace("TYPE_", "").title()),
+            ip=", ".join(str(i) for i in ips)[:64],
+            os=(r.get("operating_system") or "").strip(),
+            platform=(r.get("platform") or "").strip(),
+            internet_facing=loc.endswith("EXTERNAL"),
+        )
     return out
 
 
@@ -246,7 +272,7 @@ def prior_first_seen(customer_id):
     return {(a, v): fs for a, v, fs in rows}
 
 
-def expand_record(r, host, ips, carried, now):
+def expand_record(r, host, ips, carried, now, endpoints=None):
     """One va_cves row plus one of its affected hosts -> one RiskSentinel finding."""
     cve = (r.get("name") or "").strip()
     host = (host or "").strip()
@@ -284,6 +310,14 @@ def expand_record(r, host, ips, carried, now):
     if (r.get("is_excluded") or "").upper() == "YES":
         labels.append("excluded-in-cortex")
 
+    # Enrichment from the `endpoints` dataset. va_cves describes the CVE; the
+    # host's type, address and exposure only exist over there.
+    ep = (endpoints or {}).get(host) or {}
+    if ep.get("type"):
+        labels.append(f"type={ep['type']}")
+    if ep.get("internet_facing"):
+        labels.append("internet-facing")
+
     # A CVE the tenant has dismissed is imported suppressed rather than dropped,
     # so the decision stays visible and reviewable here too.
     excluded = (r.get("is_excluded") or "").upper() == "YES"
@@ -293,7 +327,9 @@ def expand_record(r, host, ips, carried, now):
         suppressed       = excluded,
         suppression_reason = ("Excluded in Cortex" if excluded else None),
         asset            = host,
-        ip_address       = ips.get(host, "") or "",
+        # endpoints carries real addresses; asset_inventory does not resolve for
+        # these hosts, which is why this column was empty for Cortex tenants.
+        ip_address       = (ep.get("ip") or ips.get(host, "") or ""),
         source           = "cortex-va",
         labels           = ", ".join(labels)[:500],
         first_seen       = first_seen,
@@ -314,7 +350,8 @@ def expand_record(r, host, ips, carried, now):
         solution         = "",
         port             = "",
         protocol         = "",
-        plugin_output    = " ".join(str(x) for x in os_types),
+        plugin_output    = (ep.get("os")
+                            or " ".join(str(x) for x in os_types)),
         cpe              = "",
     )
 
@@ -330,6 +367,11 @@ def main():
     p.add_argument("--exclude-groups", default="",
                    help="comma-separated Cortex endpoint groups to leave out, "
                         "e.g. \"EC WORKSTATIONS\". Matched case-insensitively.")
+    p.add_argument("--exclude-types", default="",
+                   help="comma-separated Cortex endpoint types to leave out, "
+                        "e.g. WORKSTATION. Prefer this over --exclude-groups for "
+                        "whole classes of machine: it does not depend on how the "
+                        "rollout happens to name its groups.")
     args = p.parse_args()
 
     global BASE_URL, API_KEY_ID, API_KEY
@@ -380,32 +422,70 @@ def main():
         print(f"  carrying first_seen forward for {len(carried):,} known findings",
               flush=True)
 
-    print("Fetching asset IP inventory...", flush=True)
-    ips = fetch_asset_ips(args.days)
-    print(f"  {len(ips)} assets with IP data", flush=True)
+    # Group exclusions and enrichment both come from `endpoints`. va_cves has no
+    # notion of groups, IPs or asset type, so hosts are filtered and enriched as
+    # the CVE rows are expanded.
+    print("Fetching endpoint detail (type, groups, IP, OS, exposure)...", flush=True)
+    endpoints = fetch_endpoints(args.days)
+    if endpoints:
+        n_ip = sum(1 for e in endpoints.values() if e.get("ip"))
+        types = Counter(e.get("type") or "?" for e in endpoints.values())
+        ext = sum(1 for e in endpoints.values() if e.get("internet_facing"))
+        print(f"  {len(endpoints)} endpoints: "
+              + ", ".join(f"{n} {t}" for t, n in types.most_common())
+              + f"; {n_ip} with an IP; {ext} internet-facing", flush=True)
+    else:
+        print("  WARNING: no endpoint detail available; findings will carry no "
+              "type or exposure", flush=True)
 
-    # Group exclusions. va_cves has no notion of groups, so membership comes
-    # from the `endpoints` dataset and hosts are filtered as they are expanded.
+    # asset_inventory is consulted only when `endpoints` yielded no addresses.
+    # It does not resolve for these hosts, so querying it as well is wasted work.
+    ips = {}
+    if not any(e.get("ip") for e in endpoints.values()):
+        print("Falling back to asset_inventory for IPs...", flush=True)
+        ips = fetch_asset_ips(args.days)
+        print(f"  {len(ips)} assets with IP data", flush=True)
+
     excluded_names = [g.strip() for g in args.exclude_groups.split(",") if g.strip()]
+    excluded_types = [t.strip() for t in args.exclude_types.split(",") if t.strip()]
     excluded_hosts = set()
+
+    if (excluded_names or excluded_types) and not endpoints:
+        raise SystemExit("ERROR: could not read endpoint detail, so the exclusions "
+                         "cannot be applied. Refusing to import everything silently.")
+
+    if excluded_types:
+        # Type is a property of the machine, so this keeps working however the
+        # rollout chooses to name or organise its groups. Matched against both
+        # the raw value and the friendly label, so WORKSTATION and
+        # TYPE_WORKSTATION both work.
+        wanted = {t.upper().replace("TYPE_", "") for t in excluded_types}
+        print(f"Excluding type(s): {', '.join(excluded_types)}", flush=True)
+        hit = {h for h, i in endpoints.items()
+               if (i.get("type") or "").upper() in wanted}
+        excluded_hosts |= hit
+        print(f"  {len(hit)} endpoint(s) of that type", flush=True)
+        present = {(i.get("type") or "").upper() for i in endpoints.values()}
+        unmatched = wanted - present
+        if unmatched:
+            print(f"  WARNING: no endpoint has type: {', '.join(sorted(unmatched))}"
+                  f"  (seen: {', '.join(sorted(x for x in present if x))})", flush=True)
+
     if excluded_names:
         wanted = {g.upper() for g in excluded_names}
         print(f"Excluding group(s): {', '.join(excluded_names)}", flush=True)
-        ep_groups = fetch_endpoint_groups(args.days)
-        if not ep_groups:
-            raise SystemExit("ERROR: could not read endpoint group membership, so the "
-                             "exclusion cannot be applied. Refusing to import "
-                             "everything silently.")
-        for host, groups in ep_groups.items():
-            if {g.upper() for g in groups} & wanted:
-                excluded_hosts.add(host)
-        print(f"  {len(ep_groups)} endpoints known, "
-              f"{len(excluded_hosts)} in the excluded group(s)", flush=True)
-        unmatched = wanted - {g.upper() for gs in ep_groups.values() for g in gs}
+        hit = {h for h, i in endpoints.items()
+               if {g.upper() for g in i["groups"]} & wanted}
+        excluded_hosts |= hit
+        print(f"  {len(hit)} endpoint(s) in the excluded group(s)", flush=True)
+        unmatched = wanted - {g.upper() for i in endpoints.values() for g in i["groups"]}
         if unmatched:
             # A typo here would silently exclude nothing, so name it.
             print(f"  WARNING: no endpoint belongs to: {', '.join(sorted(unmatched))}",
                   flush=True)
+
+    if excluded_hosts:
+        print(f"  {len(excluded_hosts)} host(s) excluded in total", flush=True)
 
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     print("Fetching CVEs in a single streamed query...", flush=True)
@@ -430,7 +510,7 @@ def main():
             if key in seen:
                 continue
             seen.add(key)
-            rec = expand_record(r, h, ips, carried, now)
+            rec = expand_record(r, h, ips, carried, now, endpoints)
             if rec:
                 records.append(rec)
 
@@ -455,8 +535,19 @@ def main():
     if supp:
         print(f"  ({supp:,} imported suppressed, excluded in Cortex)")
 
+    with_ip = sum(1 for r in records if r["ip_address"])
+    typed   = Counter()
+    for r in records:
+        for t in (r["labels"] or "").split(","):
+            t = t.strip()
+            if t.startswith("type="):
+                typed[t[5:]] += 1
+    print(f"\nEnrichment: {with_ip:,} finding(s) with an IP"
+          + (f"; by asset type " + ", ".join(f"{n:,} {t}" for t, n in typed.most_common())
+             if typed else ""))
+
     hosts = Counter(r["asset"] for r in records)
-    print(f"\nAffected assets: {len(hosts):,}")
+    print(f"Affected assets: {len(hosts):,}")
     for h, n in hosts.most_common(10):
         print(f"  {n:>7,}  {h}")
 
