@@ -174,12 +174,18 @@ def main():
     print("Fetching asset index...", flush=True)
     assets: dict[str, dict] = {}
     for a in paginate(http, "/api/2.0/assets", "assets"):
+        # USM returns `networkAdapters`, each carrying an `ip` key. An earlier
+        # version read networkInterfaces[].ipv4, which USM never returns, so
+        # every API import silently recorded no address at all while the CSV
+        # path recorded them fine.
         ips = []
-        for iface in a.get("networkInterfaces") or []:
-            ips.extend(iface.get("ipv4") or [])
+        for nic in a.get("networkAdapters") or []:
+            v = nic.get("ip")
+            if v and v not in ips:
+                ips.append(str(v))
         assets[a["id"]] = {
             "name": a.get("name") or a.get("id"),
-            "ip":   ", ".join(ips) if ips else (a.get("ip") or ""),
+            "ip":   ", ".join(ips)[:64],
             "os":   a.get("operatingSystem") or "",
         }
     print(f"  {len(assets)} assets loaded", flush=True)

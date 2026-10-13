@@ -4,6 +4,19 @@ All notable changes to RiskSentinel (by Beyond Cyber) are documented here.
 
 ---
 
+## [4.26.1] - 2026-10-13
+### Fixed
+- **USM API imports recorded no IP addresses at all.** `levelblue_import.py` read `networkInterfaces[].ipv4`; USM returns `networkAdapters[].ip`. Checked against all 1,025 Nebula assets: `networkInterfaces` never appears in the response, so the loop never ran, and the fallback `a.get("ip")` does not exist either. Every API import silently stored an empty address while the CSV path stored them correctly, which is how it went unnoticed.
+- Nebula's new import: **100% IP coverage** (1,709 of 1,709) against 0% on the three previous API imports. Affinity: **97.3%** (12,078 of 12,409).
+- Across the whole database, `ip_address` goes from **2.2% to 88.6%** populated.
+
+### Note
+Historical API imports cannot be backfilled — the fix applies at import time, and USM's asset inventory reflects today rather than June. The three empty Nebula snapshots and one Affinity snapshot stay empty and will age out of retention.
+
+This is the third variant of the same mistake in three importers: Cortex `findings` carries no address and needed `endpoints` (4.25.0), Cortex `va_cves` likewise, and USM had the field name wrong. The 2.2% population rate read as "the scanners do not provide it" when mostly we were not reading it properly.
+
+---
+
 ## [4.26.0] - 2026-10-13
 ### Added
 - **Export CSV on the Vulnerabilities page**, beside Exclude Accepted Risk. It exports **the current selection, not the whole import**: severity, asset group, search, asset, suppression state and the accepted-risk toggle all carry through, and the button shows the row count it will produce.
