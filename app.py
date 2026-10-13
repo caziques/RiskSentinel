@@ -17,7 +17,7 @@ from werkzeug.utils import secure_filename
 
 from models import db, User, Customer, UserCustomer, ScanImport, Vulnerability, NewsFeed, RiskAcceptance, AssetGroup, AssetGroupMember, RemediationProject, RemediationItem, RemediationSnapshot, SuppressionRule
 
-__version__ = '4.25.0'
+__version__ = '4.26.0'
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'change-me-in-production-8f3k2j')
@@ -912,6 +912,51 @@ def api_dashboard_vulns():
 
 # ── Vulnerabilities ───────────────────────────────────────────────────────────
 
+def _apply_vuln_filters(q, import_id=None, severity='', asset_filter='',
+                        group_id=None, show_suppressed='false', search='',
+                        exclude_accepted=False):
+    """
+    Apply the Vulnerabilities page filters to a query.
+
+    Shared by the page and its CSV export so the two cannot drift. An export
+    that quietly disagreed with what is on screen would be worse than no export.
+    Returns (query, accepted_count).
+    """
+    if import_id:
+        q = q.filter(Vulnerability.scan_import_id == import_id)
+    if severity:
+        q = q.filter(Vulnerability.risk_factor == severity)
+    if asset_filter:
+        q = q.filter(Vulnerability.asset.ilike(f'%{asset_filter}%'))
+    # Asset groups are membership lists rather than a column on the finding, so
+    # the filter is by name. A group with no members matches nothing rather than
+    # silently widening to the whole estate.
+    if group_id:
+        members = [m.asset_name for m in
+                   AssetGroupMember.query.filter_by(group_id=group_id)]
+        q = q.filter(Vulnerability.asset.in_(members or ['\x00_no_members']))
+    if show_suppressed == 'false':
+        q = q.filter(Vulnerability.suppressed == False)
+    elif show_suppressed == 'true':
+        q = q.filter(Vulnerability.suppressed == True)
+    if search:
+        q = q.filter(or_(
+            Vulnerability.plugin_name.ilike(f'%{search}%'),
+            Vulnerability.asset.ilike(f'%{search}%'),
+            Vulnerability.ip_address.ilike(f'%{search}%'),
+            Vulnerability.synopsis.ilike(f'%{search}%'),
+            Vulnerability.vulnerability_id.ilike(f'%{search}%'),
+            Vulnerability.cpe.ilike(f'%{search}%'),
+        ))
+    accepted_count = 0
+    if exclude_accepted:
+        active_ras = _fetch_active_ras()
+        excl_assets, excl_findings = _ra_criteria(active_ras)
+        q = _apply_ra_filter(q, excl_assets, excl_findings)
+        accepted_count = len(_accepted_vuln_ids(import_id, active_ras)) if import_id else 0
+    return q, accepted_count
+
+
 @app.route('/vulnerabilities')
 @login_required
 @customer_required
@@ -931,40 +976,11 @@ def vulnerabilities():
 
     all_imports = _cust_scan_q().order_by(desc(ScanImport.imported_at)).all()
 
-    q = Vulnerability.query
-    if import_id:
-        q = q.filter_by(scan_import_id=import_id)
-    if severity:
-        q = q.filter_by(risk_factor=severity)
-    if asset_filter:
-        q = q.filter(Vulnerability.asset.ilike(f'%{asset_filter}%'))
-    # Asset groups are membership lists rather than a column on the finding, so
-    # the filter is by name. A group with no members matches nothing rather than
-    # silently widening to the whole estate.
-    if group_id:
-        members = [m.asset_name for m in
-                   AssetGroupMember.query.filter_by(group_id=group_id)]
-        q = q.filter(Vulnerability.asset.in_(members or ['\x00_no_members']))
-    if show_suppressed == 'false':
-        q = q.filter_by(suppressed=False)
-    elif show_suppressed == 'true':
-        q = q.filter_by(suppressed=True)
-    if search:
-        q = q.filter(or_(
-            Vulnerability.plugin_name.ilike(f'%{search}%'),
-            Vulnerability.asset.ilike(f'%{search}%'),
-            Vulnerability.ip_address.ilike(f'%{search}%'),
-            Vulnerability.synopsis.ilike(f'%{search}%'),
-            Vulnerability.vulnerability_id.ilike(f'%{search}%'),
-            Vulnerability.cpe.ilike(f'%{search}%'),
-        ))
-    if exclude_accepted:
-        active_ras = _fetch_active_ras()
-        excl_assets, excl_findings = _ra_criteria(active_ras)
-        q = _apply_ra_filter(q, excl_assets, excl_findings)
-        accepted_count = len(_accepted_vuln_ids(import_id, active_ras)) if import_id else 0
-    else:
-        accepted_count = 0
+    q, accepted_count = _apply_vuln_filters(
+        Vulnerability.query, import_id=import_id, severity=severity,
+        asset_filter=asset_filter, group_id=group_id,
+        show_suppressed=show_suppressed, search=search,
+        exclude_accepted=exclude_accepted)
 
     total = q.count()
     pagination = q.order_by(desc(Vulnerability.severity_level), desc(Vulnerability.cvss_v3_score)).paginate(
@@ -1039,6 +1055,114 @@ def vulnerabilities():
                            group_id=group_id,
                            current_group=(db.session.get(AssetGroup, group_id)
                                           if group_id else None))
+
+
+@app.route('/vulnerabilities/export-csv')
+@login_required
+@customer_required
+def vulnerabilities_export_csv():
+    """
+    CSV of exactly what the Vulnerabilities page is currently showing.
+
+    Uses the same filter builder as the page, so severity, asset group, search,
+    asset, suppression state and the accepted-risk toggle all carry through. No
+    row cap: the point of an export is to get the whole selection, and the page
+    only pages for rendering.
+    """
+    import csv, io as _io
+    import_id        = request.args.get('import_id', type=int)
+    severity         = request.args.get('severity', '')
+    asset_filter     = request.args.get('asset', '')
+    show_suppressed  = request.args.get('suppressed', 'false')
+    search           = request.args.get('search', '').strip()
+    exclude_accepted = request.args.get('exclude_accepted', '0') == '1'
+    group_id         = request.args.get('group', type=int)
+
+    latest = _latest_import()
+    if not import_id and latest:
+        import_id = latest.id
+    if not import_id:
+        return ('No data', 404)
+
+    # Columns only, rather than whole ORM objects: an unbounded export of a
+    # large tenant would otherwise materialise every row as an entity.
+    base = db.session.query(
+        Vulnerability.asset, Vulnerability.ip_address,
+        Vulnerability.vulnerability_id, Vulnerability.plugin_id,
+        Vulnerability.plugin_name, Vulnerability.plugin_family,
+        Vulnerability.risk_factor, Vulnerability.cvss_v3_score,
+        Vulnerability.first_seen, Vulnerability.last_seen,
+        Vulnerability.suppressed, Vulnerability.solution,
+        Vulnerability.affected_software, Vulnerability.labels,
+        Vulnerability.port, Vulnerability.protocol)
+    q, _accepted = _apply_vuln_filters(
+        base, import_id=import_id, severity=severity, asset_filter=asset_filter,
+        group_id=group_id, show_suppressed=show_suppressed, search=search,
+        exclude_accepted=exclude_accepted)
+    rows = q.order_by(desc(Vulnerability.severity_level),
+                      desc(Vulnerability.cvss_v3_score),
+                      Vulnerability.asset).all()
+
+    ext_assets = _internet_facing_assets()
+    now = datetime.utcnow()
+    fields = ['Asset', 'IP Address', 'Exposure', 'CVE / Vulnerability ID',
+              'Plugin ID', 'Plugin Name', 'Family', 'Severity', 'CVSS v3',
+              'First Seen', 'Last Seen', 'Age (days)', 'SLA (days)',
+              'SLA Status', 'Suppressed', 'Port', 'Protocol',
+              'Affected Software', 'Solution', 'Labels']
+
+    buf = _io.StringIO()
+    w = csv.DictWriter(buf, fieldnames=fields, extrasaction='ignore')
+    w.writeheader()
+    for v in rows:
+        age = (now - v.first_seen).days if v.first_seen else None
+        sla = _sla_for(v.risk_factor, v.asset, ext_assets)
+        if age is None or sla is None:
+            status = ''
+        else:
+            status = 'Breached' if age > sla else 'Within SLA'
+        w.writerow({
+            'Asset': v.asset or '',
+            'IP Address': v.ip_address or '',
+            'Exposure': 'Internet-facing' if v.asset in ext_assets else 'Internal',
+            'CVE / Vulnerability ID': v.vulnerability_id or '',
+            'Plugin ID': v.plugin_id or '',
+            'Plugin Name': v.plugin_name or '',
+            'Family': v.plugin_family or '',
+            'Severity': v.risk_factor or '',
+            'CVSS v3': v.cvss_v3_score if v.cvss_v3_score is not None else '',
+            'First Seen': v.first_seen.strftime('%Y-%m-%d') if v.first_seen else '',
+            'Last Seen': v.last_seen.strftime('%Y-%m-%d') if v.last_seen else '',
+            'Age (days)': age if age is not None else '',
+            'SLA (days)': sla if sla is not None else '',
+            'SLA Status': status,
+            'Suppressed': 'Yes' if v.suppressed else 'No',
+            'Port': v.port or '',
+            'Protocol': v.protocol or '',
+            'Affected Software': v.affected_software or '',
+            # Newlines in free text would break the row for some readers.
+            'Solution': (v.solution or '').replace('\r', ' ').replace('\n', ' ')[:500],
+            'Labels': v.labels or '',
+        })
+
+    cust = get_current_customer()
+    bits = [cust.name.replace(' ', '_') if cust else 'export']
+    if severity:
+        bits.append(severity)
+    if group_id:
+        g = db.session.get(AssetGroup, group_id)
+        if g:
+            bits.append(g.name.replace(' ', '_'))
+    if show_suppressed == 'true':
+        bits.append('Suppressed')
+    if exclude_accepted:
+        bits.append('ExclAccepted')
+    fname = 'Vulnerabilities-' + '-'.join(bits) + \
+            f'-{datetime.utcnow():%Y-%m-%d}.csv'
+
+    from flask import Response
+    return Response(buf.getvalue(), mimetype='text/csv',
+                    headers={'Content-Disposition': f'attachment; filename="{fname}"'})
 
 
 @app.route('/vulnerabilities/<int:vuln_id>')

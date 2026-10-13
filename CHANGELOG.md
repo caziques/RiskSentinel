@@ -4,6 +4,23 @@ All notable changes to RiskSentinel (by Beyond Cyber) are documented here.
 
 ---
 
+## [4.26.0] - 2026-10-13
+### Added
+- **Export CSV on the Vulnerabilities page**, beside Exclude Accepted Risk. It exports **the current selection, not the whole import**: severity, asset group, search, asset, suppression state and the accepted-risk toggle all carry through, and the button shows the row count it will produce.
+- No row cap. The page pages at 100 for rendering; an export that silently gave you the first 100 would be worse than none.
+- 20 columns, including exposure (internet-facing or internal), age in days, the applicable SLA and whether it is breached, so the file is useful without further lookups.
+- The filename reflects the filters, e.g. `Vulnerabilities-MotusCR-Critical-2026-10-13.csv`, `Vulnerabilities-Nebula-Nike_Servers-2026-10-13.csv`.
+
+### Internal
+- The page's filter logic is extracted into `_apply_vuln_filters()` and **shared by the page and the export**, rather than written twice. Duplicating it is how the severity chips came to drop filters in 4.20.1, and an export that disagreed with the screen would be a worse version of that bug.
+- The export selects columns rather than ORM entities, so an unbounded export of a large tenant does not materialise every row as an object. 111,918 rows export in about 1.4 seconds.
+- Newlines are stripped from `Solution` and it is capped at 500 characters, since embedded newlines break the row for some CSV readers.
+
+### Verified
+Export row counts match the page exactly across every filter: unfiltered (111,918), each severity (6,051 / 80,437 / 24,829 / 601), severity with search (3,323), asset group (238), group with severity (19), suppressed-only (264), and accepted-risk excluded (1,614 against 1,376).
+
+---
+
 ## [4.25.0] - 2026-10-12
 ### Added
 - **`--exclude-types` on the legacy Cortex importer**, e.g. `--exclude-types WORKSTATION`. Asset type is a property of the machine, so this keeps working however the rollout names or organises its endpoint groups. Accepts `WORKSTATION` or `TYPE_WORKSTATION`.

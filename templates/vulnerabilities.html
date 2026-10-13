@@ -157,6 +157,18 @@
     <i class="bi bi-shield-check me-1"></i> Exclude Accepted Risk
   </a>
   {% endif %}
+
+  {# Exports exactly the current selection, not the whole import. #}
+  <a href="{{ url_for('vulnerabilities_export_csv', import_id=current_import_id,
+                      group=group_id, severity=severity, asset=asset_filter,
+                      suppressed=show_suppressed, search=search,
+                      exclude_accepted='1' if exclude_accepted else '0') }}"
+     class="btn btn-sm btn-outline-success"
+     title="Download the {{ '{:,}'.format(total) }} currently filtered finding{{ 's' if total != 1 }} as CSV">
+    <i class="bi bi-file-earmark-spreadsheet me-1"></i>
+    Export CSV
+    <span class="badge bg-dark ms-1">{{ '{:,}'.format(total) }}</span>
+  </a>
 </div>
 
 <!-- Quick severity filters -->
